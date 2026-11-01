@@ -3,3 +3,9 @@ dist
 *.tsbuildinfo
 .DS_Store
 *.zip
+
+# Personal data: plan files and workout backups exported from the app
+*-plan.json
+my-plan.json
+*-block.json
+workouts-*.json
