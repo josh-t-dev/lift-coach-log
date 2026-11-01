@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
-import { exerciseName, metricOf } from '../data/exercises';
+import { exerciseName, findExercise, metricOf } from '../data/exercises';
+import type { AppState, TemplateExercise } from '../types';
 import { blockWeek, isoDate, snapshot } from '../lib/analytics';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend } from '../lib/llm';
@@ -178,9 +179,9 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
             <div className="plan-days">
               {rec.weekPlan.map((d, i) => (
                 <div key={i} className={`${/rest|walk|off/i.test(d.focus) || d.focus === d.activity ? '' : 'train'} ${d.activity ? 'activity' : ''}`}>
-                  <b>{d.day.replace(/^Today \((\w+)\)$/, 'Today')}</b>
-                  {d.focus}
-                  {d.activity && d.activity !== d.focus && <i>+ {d.activity}</i>}
+                  <b>{shortDay(d.day)}</b>
+                  {d.focus.replace(/ \d+ min/g, '')}
+                  {d.activity && d.activity !== d.focus && <i>+ {d.activity.replace(/ \d+ min/g, '')}</i>}
                 </div>
               ))}
             </div>
@@ -200,7 +201,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
                     ) : (
                       <div className="small" style={{ textAlign: 'right' }}>
                         {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
-                        <div className="muted">{e.weight != null ? `${e.weight} ${state.unit}` : 'find weight'}{e.rpe != null ? ` · RPE ${e.rpe}` : ''}</div>
+                        {loadText(e, state) && <div className="muted">{loadText(e, state)}</div>}
                       </div>
                     )}
                   </li>
@@ -260,4 +261,19 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
 
 function summarize(names: string[], max = 4): string {
   return names.length <= max ? names.join(' · ') : `${names.slice(0, max).join(' · ')} +${names.length - max} more`;
+}
+
+/** "Today (Sun)" → "Today", "Wednesday" → "Wed". Keeps the 7-day strip narrow. */
+function shortDay(label: string): string {
+  if (/^today/i.test(label)) return 'Today';
+  const m = label.match(/^(mon|tue|wed|thu|fri|sat|sun)/i);
+  return m ? m[1][0].toUpperCase() + m[1].slice(1, 3).toLowerCase() : label.slice(0, 5);
+}
+
+/** "80 kg · RPE 8" for loaded lifts; nothing for bodyweight drills. */
+function loadText(e: TemplateExercise, state: AppState): string {
+  const ex = findExercise(e.exerciseId, state.customExercises);
+  const loaded = ex && ex.equipment !== 'bodyweight';
+  const parts = [e.weight != null ? `${e.weight} ${state.unit}` : loaded ? 'find weight' : '', e.rpe != null ? `RPE ${e.rpe}` : ''];
+  return parts.filter(Boolean).join(' · ');
 }

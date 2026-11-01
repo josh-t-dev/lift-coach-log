@@ -10,7 +10,7 @@ import { allExercises, findExercise, metricOf } from '../data/exercises';
 import type { BasePlan, EvidenceLevel, Exercise, LlmSettings, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
 import { exerciseHistory, isWorkingSet } from './analytics';
 import { principlesText } from './evidence';
-import { activityLabel, availableExercises, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
+import { activityLabel, availableExercises, isDaily, isPinned, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
 import { chat } from './providers';
 
 export { DEFAULT_LLM } from './providers';
@@ -29,6 +29,8 @@ Rules:
 - Start from BASELINE (the base plan day with this week's progressed loads already worked out). Use its weights unless you have a data-backed reason; use null when unknown.
 - Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
+- "today" is the main session in BASELINE.today. Never return a "daily" routine (e.g. a morning routine) as today's workout; the app shows routines separately.
+- weekPlan has exactly 7 entries starting with TODAY, using short day names (Sun, Mon, Tue…). The app keeps fixed-weekday days on their weekdays regardless.
 - BASE_PLAN days with fixed weekdays stay on those weekdays. "daily" days are routines done every day. Each exercise's "thisWeek" is the prescription for the current week of the block and overrides its default sets/reps; put it in the exercise note.
 - If STATUS.missedThisWeek lists sessions, don't schedule make-up sessions on top of the week; apply the user's own rules (e.g. a drop order or minimum viable week) and say what to skip or merge.
 - Effort is RPE on a 1–10 scale (10 = no reps left, 8 = about 2 reps left). Prescribe "rpe" per exercise.
@@ -223,14 +225,22 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
       sets: clamp(o.sets, 1, 8, 3),
       repMin,
       repMax,
-      rpe: clampHalf(o.rpe, 5, 10, 8),
+      // Effort only for loaded lifts the model actually rated; never for mobility drills.
+      rpe: o.rpe == null || o.rpe === '' || (ex.equipment === 'bodyweight' && !ex.primary.length) ? undefined : clampHalf(o.rpe, 5, 10, 8),
       weight: w !== null && Number.isFinite(w) && w >= 0 ? w : null,
       note: str(o.note, 200) || undefined,
     });
   }
-  if (!exercises.length) throw new Error('Model plan had no recognisable exercises');
+  // Fixed-weekday plans: the schedule is the user's, not the model's. Keep the
+  // planner's week, and keep today's session unless the model is adjusting a
+  // real (non-daily) plan day.
+  const hasFixed = input.plan.days.some(isPinned);
+  const aiName = str(today.name, 60);
+  const matchedDay = input.plan.days.find((d) => aiName && aiName.toLowerCase().includes(d.name.toLowerCase()));
+  const useBaseToday = hasFixed && (!matchedDay || isDaily(matchedDay) || !exercises.length);
+  if (!useBaseToday && !exercises.length) throw new Error('Model plan had no recognisable exercises');
 
-  const weekPlan: WeekPlanDay[] = (Array.isArray(d.weekPlan) ? d.weekPlan : [])
+  const aiWeek: WeekPlanDay[] = (Array.isArray(d.weekPlan) ? d.weekPlan : [])
     .map((p) => (p && typeof p === 'object' ? (p as Record<string, unknown>) : {}))
     .map((p) => ({ day: str(p.day, 30), focus: str(p.focus, 80), activity: str(p.activity, 80) || undefined }))
     .filter((p) => p.day && p.focus)
@@ -246,8 +256,8 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
     headline: str(d.headline, 90) || base.recommendation.headline,
     summary: str(d.summary, 600) || base.recommendation.summary,
     rationale: rationale.length ? rationale : base.recommendation.rationale,
-    weekPlan: weekPlan.length ? weekPlan : base.recommendation.weekPlan,
-    today: { name: str(today.name, 60) || base.recommendation.today.name, exercises },
+    weekPlan: hasFixed || aiWeek.length !== 7 ? base.recommendation.weekPlan : aiWeek,
+    today: useBaseToday ? base.recommendation.today : { name: aiName || base.recommendation.today.name, exercises },
   };
 }
 

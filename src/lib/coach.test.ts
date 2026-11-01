@@ -541,3 +541,47 @@ describe('empty replies from thinking models', () => {
     expect(rec.warning).toMatch(/ran out of output space/);
   });
 });
+
+describe('AI replies on fixed-weekday plans', () => {
+  // Sunday 2026-11-01: base plan says Easy Run today; morning routine is daily.
+  const SUN = new Date(2026, 10, 1, 18);
+  const fixedPlan: BasePlan = {
+    ...plan,
+    startDate: '2026-10-12', reviewDate: '2026-11-23',
+    days: [
+      { id: 'r', name: 'Morning Routine', weekdays: [0, 1, 2, 3, 4, 5, 6], exercises: [{ exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3 }] },
+      { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [{ exerciseId: 'accel-sprint', metric: 'time_distance', sets: 6, repMin: 0, repMax: 0, distance: 20 }] },
+      { id: 't', name: 'Upper', weekdays: [4], exercises: [{ exerciseId: 'bench-press', sets: 4, repMin: 4, repMax: 6 }] },
+      { id: 's', name: 'Easy Run', weekdays: [0], exercises: [{ exerciseId: 'easy-run', metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: 40 }] },
+    ],
+  };
+  const inp = { ...input, plan: fixedPlan, now: SUN };
+
+  it('keeps the planned week and main session when the model rearranges them', () => {
+    const base = planWithRules(inp);
+    const reply = {
+      headline: 'You missed last week', summary: 'S', rationale: ['r'],
+      weekPlan: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, i) => ({ day, focus: i === 3 ? 'Rest' : 'Something' })),
+      today: { name: 'Morning Routine', exercises: [{ exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3, rpe: 8, weight: null }] },
+    };
+    const rec = parseRecommendation(reply, inp, base, 'openai/gpt-oss-20b');
+    expect(rec.source).toBe('llm');
+    expect(rec.headline).toBe('You missed last week');
+    expect(rec.weekPlan).toEqual(base.recommendation.weekPlan);
+    expect(rec.weekPlan[0].focus).toBe('Easy Run');
+    expect(rec.weekPlan.find((d) => d.day === 'Thu')?.focus).toBe('Upper');
+    expect(rec.today.name).toBe('Easy Run');
+  });
+
+  it('lets the model adjust a real plan day, without inventing RPE for drills', () => {
+    const base = planWithRules(inp);
+    const reply = { today: { name: 'Upper (shortened)', exercises: [
+      { exerciseId: 'bench-press', sets: 3, repMin: 4, repMax: 6, rpe: 7.5 },
+      { exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3, rpe: 8 },
+      { exerciseId: 'face-pull', sets: 2, repMin: 15, repMax: 15 },
+    ] } };
+    const rec = parseRecommendation(reply, inp, base, 'm');
+    expect(rec.today.name).toBe('Upper (shortened)');
+    expect(rec.today.exercises.map((e) => e.rpe)).toEqual([7.5, undefined, undefined]);
+  });
+});
