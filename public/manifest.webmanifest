@@ -1,9 +1,10 @@
 {
   "name": "Lift Log",
   "short_name": "Lift Log",
-  "start_url": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#f6f6f4",
   "theme_color": "#2f6f4f",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "icons": [{ "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

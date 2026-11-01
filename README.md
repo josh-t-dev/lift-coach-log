@@ -54,6 +54,19 @@ npm run dev        # http://localhost:5173
 
 API keys are stored only in the browser on that device, and **Export** leaves them out.
 
+## Host it (GitHub Pages)
+
+1. Push this repository to GitHub. It must be **public** for free GitHub Pages.
+2. In the repository, go to **Settings → Pages → Source: GitHub Actions**.
+3. Every push to `main` then builds, tests and publishes the app to `https://<username>.github.io/<repo>/`.
+
+Your workouts never go to GitHub; they stay in each device's browser. To move data between addresses or devices, use **Settings → Export** and then **Import**.
+
+**AI from the hosted site:**
+- **Hugging Face** and **Claude** work from any device.
+- **Ollama** on your Mac works from the Mac's browser once Ollama allows the site: run `launchctl setenv OLLAMA_ORIGINS "https://<username>.github.io"`, then quit and reopen Ollama. Chrome may ask permission to access local network devices; allow it.
+- A phone can't reach Ollama on your Mac from the hosted (https) site, because browsers block https pages from calling plain-http addresses on your network. On the phone, use Hugging Face, or open the app from your Mac with `npm run dev -- --host` on the same Wi-Fi.
+
 ## Scripts
 
 | | |
