@@ -126,7 +126,13 @@ export interface PlanPrinciple {
   enabled: boolean;
   /** Written by the user rather than taken from the evidence base. */
   custom?: boolean;
+  /** Suggested by the AI coach and accepted by the user. */
+  aiSuggested?: boolean;
+  /** Strength of the supporting evidence, when known. */
+  evidence?: EvidenceLevel;
 }
+
+export type EvidenceLevel = 'strong' | 'moderate' | 'limited';
 
 export interface PlanDay {
   id: string;

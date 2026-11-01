@@ -4,9 +4,10 @@ import { NumInput } from '../components/NumInput';
 import { allExercises, cardio as makeCardio, exerciseName, metricOf } from '../data/exercises';
 import { blockWeek, isoDate } from '../lib/analytics';
 import { defaultPrinciples } from '../lib/evidence';
+import { suggestRules, type SuggestedRule } from '../lib/llm';
 import { generateBasePlan, generateDays, projectedCardioMinutes, projectedWeeklySets, resetTargets } from '../lib/planner';
 import { importPlan, uid, update, useAppState } from '../store';
-import { EQUIPMENT, MUSCLES, type Activity, type BasePlan, type Experience, type Goal, type Intensity, type PlanDay } from '../types';
+import { EQUIPMENT, MUSCLES, type Activity, type BasePlan, type EvidenceLevel, type Experience, type Goal, type Intensity, type PlanDay } from '../types';
 import { describeTarget, RPE_OPTIONS, rpeHint, WorkoutEditor } from './Workouts';
 
 function editPlan(fn: (p: BasePlan) => void) {
@@ -251,14 +252,15 @@ function Principles({ plan }: { plan: BasePlan }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [newRule, setNewRule] = useState('');
+  const [newSource, setNewSource] = useState('');
   const missingDefaults = defaultPrinciples().filter((d) => !plan.principles.some((p) => p.id === d.id));
 
   return (
     <div className="card">
       <h3>Evidence & your rules</h3>
       <p className="small muted">
-        The coach follows every ticked rule. Untick research you want it to ignore, edit wording, or add your own rules
-        (e.g. "No barbell squats", "Sundays are long runs", "Prioritise shoulders").
+        The coach follows every ticked rule. Untick research you want it to ignore, edit wording, add your own rules, or ask
+        the AI coach for evidence-based ones.
       </p>
       <div>
         {plan.principles.map((pr) => (
@@ -276,7 +278,11 @@ function Principles({ plan }: { plan: BasePlan }) {
                 </div>
               ) : (
                 <>
-                  <div style={{ fontSize: 14 }}>{pr.custom && <span className="badge" style={{ marginRight: 6 }}>Your rule</span>}{pr.rule}</div>
+                  <div style={{ fontSize: 14 }}>
+                    {pr.aiSuggested ? <span className="badge" style={{ marginRight: 6 }}>AI-suggested</span> : pr.custom && <span className="badge" style={{ marginRight: 6 }}>Your rule</span>}
+                    {pr.evidence && <EvidenceBadge level={pr.evidence} />}
+                    {pr.rule}
+                  </div>
                   {pr.source && <div className="small muted">{pr.source}</div>}
                   <div className="row" style={{ gap: 0, marginTop: 2 }}>
                     <button className="btn ghost small" onClick={() => { setEditing(pr.id); setDraft(pr.rule); }}>Edit</button>
@@ -288,12 +294,16 @@ function Principles({ plan }: { plan: BasePlan }) {
           </div>
         ))}
       </div>
-      <div className="stack" style={{ marginTop: 10 }}>
-        <textarea placeholder="Add your own rule for the coach…" value={newRule} onChange={(e) => setNewRule(e.target.value)} />
+
+      <div className="stack" style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+        <b>Add a rule yourself</b>
+        <textarea aria-label="New rule" placeholder="e.g. No hard leg work the day before basketball" value={newRule} onChange={(e) => setNewRule(e.target.value)} />
+        <input type="text" aria-label="Source (optional)" placeholder="Source (optional), e.g. Harøy et al. 2019 or 'my physio'" value={newSource} onChange={(e) => setNewSource(e.target.value)} />
         <div className="row wrap">
           <button className="btn" disabled={!newRule.trim()} onClick={() => {
-            editPlan((x) => void x.principles.push({ id: `custom-${uid()}`, rule: newRule.trim(), source: '', enabled: true, custom: true }));
+            editPlan((x) => void x.principles.push({ id: `custom-${uid()}`, rule: newRule.trim(), source: newSource.trim(), enabled: true, custom: true }));
             setNewRule('');
+            setNewSource('');
           }}>Add rule</button>
           {missingDefaults.length > 0 && (
             <button className="btn ghost" onClick={() => editPlan((x) => void x.principles.push(...missingDefaults))}>
@@ -302,6 +312,70 @@ function Principles({ plan }: { plan: BasePlan }) {
           )}
         </div>
       </div>
+
+      <AskForRules plan={plan} />
+    </div>
+  );
+}
+
+const EVIDENCE_LABEL: Record<EvidenceLevel, string> = { strong: 'Strong evidence', moderate: 'Moderate evidence', limited: 'Limited evidence' };
+
+function EvidenceBadge({ level }: { level: EvidenceLevel }) {
+  return <span className={`badge ev-${level}`} style={{ marginRight: 6 }}>{EVIDENCE_LABEL[level]}</span>;
+}
+
+/** Ask the AI coach for science/evidence-based rules; the user reviews and adds the ones they want. */
+function AskForRules({ plan }: { plan: BasePlan }) {
+  const state = useAppState();
+  const [ask, setAsk] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [suggestions, setSuggestions] = useState<SuggestedRule[]>([]);
+  const aiOn = state.llm.enabled && !!state.llm.model;
+
+  const run = async () => {
+    setBusy(true);
+    setError('');
+    setSuggestions([]);
+    try {
+      setSuggestions(await suggestRules(plan, state.llm, ask, state.customExercises));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const add = (r: SuggestedRule) => {
+    editPlan((x) => void x.principles.push({ id: `custom-${uid()}`, rule: r.rule, source: r.source, evidence: r.evidence, enabled: true, custom: true, aiSuggested: true }));
+    setSuggestions((list) => list.filter((x) => x !== r));
+  };
+
+  return (
+    <div className="stack" style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <b>Ask the AI coach for an evidence-based rule</b>
+      <p className="small muted" style={{ margin: 0 }}>
+        Describe what you want. The coach is instructed to only suggest rules backed by scientific evidence, cite the source, and
+        rate how strong the evidence is. Nothing is added until you tap Add — check the source before relying on it.
+      </p>
+      <input type="text" aria-label="What do you want a rule for?" placeholder="e.g. protect my knees during plyos · get faster over 100 m"
+        value={ask} onChange={(e) => setAsk(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && ask.trim() && aiOn && !busy && run()} />
+      <button className="btn" disabled={!ask.trim() || busy || !aiOn} onClick={run}>
+        {busy ? <><span className="spinner" /> Asking…</> : 'Suggest evidence-based rules'}
+      </button>
+      {!aiOn && <p className="small muted" style={{ margin: 0 }}>Turn on the AI coach in Settings to use this. You can still add rules yourself above.</p>}
+      {error && <div className="banner warn">{error}</div>}
+      {suggestions.map((r, i) => (
+        <div key={i} className="card" style={{ margin: 0 }}>
+          <div style={{ fontSize: 14 }}><EvidenceBadge level={r.evidence} />{r.rule}</div>
+          {r.source && <div className="small muted" style={{ marginTop: 4 }}>Source: {r.source}</div>}
+          {r.note && <div className="small" style={{ marginTop: 4 }}>{r.note}</div>}
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn small primary" onClick={() => add(r)}>Add</button>
+            <button className="btn small ghost" onClick={() => setSuggestions((list) => list.filter((x) => x !== r))}>Dismiss</button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

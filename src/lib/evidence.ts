@@ -112,6 +112,9 @@ export function defaultPrinciples(): PlanPrinciple[] {
 export function principlesText(principles: PlanPrinciple[] = defaultPrinciples()): string {
   return principles
     .filter((p) => p.enabled && p.rule.trim())
-    .map((p, i) => `${i + 1}. ${p.custom ? "[user's own rule] " : `[${p.id}] `}${p.rule.trim()}${p.source ? ` (Source: ${p.source})` : ''}`)
+    .map((p, i) => {
+      const tag = p.aiSuggested ? `[evidence-based rule added by the user${p.evidence ? `, evidence: ${p.evidence}` : ''}] ` : p.custom ? "[user's own rule] " : `[${p.id}] `;
+      return `${i + 1}. ${tag}${p.rule.trim()}${p.source ? ` (Source: ${p.source})` : ''}`;
+    })
     .join('\n');
 }

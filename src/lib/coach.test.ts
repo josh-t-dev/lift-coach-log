@@ -4,7 +4,7 @@ import { hydrate, importPlan } from '../store';
 import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
-import { buildSystemPrompt, buildUserPrompt, extractJson, parseRecommendation, recommend } from './llm';
+import { buildRuleSystemPrompt, buildRuleUserPrompt, buildSystemPrompt, buildUserPrompt, extractJson, parseRecommendation, recommend, suggestRules } from './llm';
 import { generateBasePlan, planWithRules, projectedWeeklySets } from './planner';
 
 const profile: Profile = {
@@ -465,5 +465,45 @@ describe('fixed-weekday plans', () => {
     expect(p.days.map((d) => d.name)).toEqual(['Morning Routine', 'Sprints', 'Lower A', 'Upper']);
     expect(p.id).not.toBe(fixed.id);
     expect(() => importPlan({ sessions: [] })).toThrow(/lift-log-plan/);
+  });
+});
+
+describe('evidence-based rule suggestions', () => {
+  const on: LlmSettings = { enabled: true, api: 'openai', preset: 'custom', baseUrl: 'http://x/v1', model: 'm', apiKey: '', jsonMode: false };
+
+  it('tells the model every rule must be science/evidence-based, cited, rated and never invented', () => {
+    const sys = buildRuleSystemPrompt();
+    expect(sys).toMatch(/Every rule must be science\/evidence-based/);
+    expect(sys).toMatch(/never invent a citation/);
+    expect(sys).toMatch(/"evidence": "strong" \| "moderate" \| "limited"/);
+    expect(buildSystemPrompt(plan)).toMatch(/must be grounded in scientific evidence/);
+    const user = buildRuleUserPrompt(plan, 'protect my knees');
+    expect(user).toContain('I want an evidence-based rule for: protect my knees');
+    expect(user).toContain('EXISTING_RULES');
+  });
+
+  it('asks the model and returns validated suggestions', async () => {
+    const reply = { rules: [
+      { rule: 'Do Copenhagen adductions 2×/week', source: 'Harøy et al. 2019', evidence: 'strong', note: 'Fits your field sports' },
+      { rule: 'Ice baths after every lift', source: '', evidence: 'proven!!', note: '' },
+      { rule: '', source: 'x', evidence: 'strong' },
+    ] };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    const out = await suggestRules(plan, on, 'groin injuries');
+    vi.unstubAllGlobals();
+    expect(out).toEqual([
+      { rule: 'Do Copenhagen adductions 2×/week', source: 'Harøy et al. 2019', evidence: 'strong', note: 'Fits your field sports' },
+      { rule: 'Ice baths after every lift', source: '', evidence: 'limited', note: '' },
+    ]);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.messages[0].content).toMatch(/science\/evidence-based/);
+    expect(body.messages[1].content).toContain('groin injuries');
+  });
+
+  it('refuses when the AI coach is off, and labels accepted AI rules in the coaching prompt', async () => {
+    await expect(suggestRules(plan, { ...on, enabled: false }, 'x')).rejects.toThrow(/turned off/);
+    const withRule: BasePlan = { ...plan, principles: [{ id: 'c1', rule: 'Copenhagens 2×/week', source: 'Harøy 2019', enabled: true, custom: true, aiSuggested: true, evidence: 'strong' }] };
+    expect(buildSystemPrompt(withRule)).toContain('[evidence-based rule added by the user, evidence: strong] Copenhagens 2×/week (Source: Harøy 2019)');
   });
 });

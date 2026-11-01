@@ -7,7 +7,7 @@
  * a rule-based baseline plan, and must answer with JSON we validate.
  */
 import { allExercises, findExercise, metricOf } from '../data/exercises';
-import type { BasePlan, Exercise, LlmSettings, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
+import type { BasePlan, EvidenceLevel, Exercise, LlmSettings, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
 import { exerciseHistory, isWorkingSet } from './analytics';
 import { principlesText } from './evidence';
 import { activityLabel, availableExercises, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
@@ -17,6 +17,8 @@ export { DEFAULT_LLM } from './providers';
 
 export function buildSystemPrompt(plan: BasePlan): string {
   return `You are an evidence-based strength and conditioning coach inside a workout tracking app.
+
+Everything you recommend must be grounded in scientific evidence: peer-reviewed research, systematic reviews and meta-analyses, or recognized position stands and consensus statements. Where the evidence is mixed or weak, say so rather than overstating it. Never invent studies or citations. Tie each rationale point to one of the principles below or to the user's own data.
 
 The user's training principles for this block. The research-backed ones come with sources; rules marked [user's own rule] are the user's personal preferences and must be respected unless they would clearly be unsafe:
 ${principlesText(plan.principles)}
@@ -265,4 +267,67 @@ export async function recommend(input: PlannerInput & { distanceUnit?: string },
     const hint = e instanceof Error ? e.message : String(e);
     return { ...base.recommendation, warning: `AI coach unavailable (${hint}) — showing the built-in evidence-based plan.` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rule suggestions: the user describes what they want, the model proposes
+// evidence-based rules with sources, and the user decides which to add.
+
+export interface SuggestedRule {
+  rule: string;
+  source: string;
+  evidence: EvidenceLevel;
+  note: string;
+}
+
+export function buildRuleSystemPrompt(): string {
+  return `You are an evidence-based strength & conditioning and sports-science advisor inside a workout tracking app. The user wants to add rules to their training plan. Propose 1 to 3 short, actionable training rules.
+
+Every rule must be science/evidence-based:
+- Ground each rule in scientific evidence: peer-reviewed research, systematic reviews or meta-analyses, or recognized position stands and consensus statements (e.g. ACSM, NSCA, WHO).
+- "source": cite that evidence as authors + year (+ journal), or organization + statement + year. Only cite sources you are confident exist. If you are not sure of an exact paper, describe the evidence instead (e.g. "meta-analyses of RCTs on plyometric training") — never invent a citation.
+- "evidence": "strong" (consistent meta-analyses/RCTs), "moderate" (several good studies, some inconsistency) or "limited" (small, indirect or mixed studies).
+- If what the user asks for is not supported by evidence, do not present it as evidence-based: say so in "note", rate it "limited", and offer the closest evidence-based alternative as the rule.
+- Fit the user's goals, schedule and existing rules. Do not repeat a rule they already have.
+- This is general fitness guidance, not medical advice. For pain, injury or medical conditions, keep rules conservative and recommend seeing a qualified professional.
+
+Reply with ONLY a JSON object, no markdown:
+{"rules": [{"rule": string (max 240 chars), "source": string, "evidence": "strong" | "moderate" | "limited", "note": string (one sentence: why it fits this user, or caveats)}]}`;
+}
+
+export function buildRuleUserPrompt(plan: BasePlan, request: string, custom: Exercise[] = []): string {
+  const ctx = {
+    GOALS_AND_PROFILE: plan.profile,
+    PLAN: plan.name,
+    DAYS: plan.days.map((d) => d.name),
+    WEEKLY_ACTIVITIES: (plan.activities ?? []).map((a) => activityLabel(a, custom)),
+    EXISTING_RULES: plan.principles.filter((p) => p.enabled).map((p) => p.rule),
+  };
+  return `I want an evidence-based rule for: ${request.trim()}\n\nMy plan for context:\n${JSON.stringify(ctx, null, 1)}`;
+}
+
+const LEVELS: EvidenceLevel[] = ['strong', 'moderate', 'limited'];
+
+export function parseRuleSuggestions(data: unknown): SuggestedRule[] {
+  const list = (data as { rules?: unknown })?.rules;
+  if (!Array.isArray(list)) throw new Error('The model did not return any rules');
+  const out = list
+    .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
+    .map((r) => ({
+      rule: str(r.rule, 300),
+      source: str(r.source, 200),
+      evidence: (LEVELS.includes(r.evidence as EvidenceLevel) ? r.evidence : 'limited') as EvidenceLevel,
+      note: str(r.note, 300),
+    }))
+    .filter((r) => r.rule)
+    .slice(0, 3);
+  if (!out.length) throw new Error('The model did not return any rules');
+  return out;
+}
+
+/** Ask the configured model for evidence-based rule suggestions. Throws with a readable message on failure. */
+export async function suggestRules(plan: BasePlan, settings: LlmSettings, request: string, custom: Exercise[] = [], signal?: AbortSignal): Promise<SuggestedRule[]> {
+  if (!settings.enabled || !settings.model) throw new Error('The AI coach is turned off in Settings');
+  const reply = await chat(settings, buildRuleSystemPrompt(), buildRuleUserPrompt(plan, request, custom), signal);
+  return parseRuleSuggestions(extractJson(reply));
 }
