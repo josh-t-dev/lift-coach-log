@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ExercisePicker } from '../components/ExercisePicker';
+import { NumInput } from '../components/NumInput';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Template, TemplateExercise } from '../types';
@@ -112,7 +113,6 @@ export function WorkoutEditor<T extends Editable>({
   const [picking, setPicking] = useState(false);
   const setEx = (i: number, patch: Partial<TemplateExercise>) =>
     setT({ ...t, exercises: t.exercises.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
-  const n = (v: string, d: number) => (v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
   const opt = (v: string) => (v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -167,11 +167,11 @@ export function WorkoutEditor<T extends Editable>({
             {metric === 'weight_reps' ? (
               <div className="grid2" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginTop: 8 }}>
                 <label className="field"><span>Sets</span>
-                  <input type="number" inputMode="numeric" value={e.sets} onChange={(ev) => setEx(i, { sets: Math.max(1, n(ev.target.value, 1)) })} /></label>
+                  <NumInput inputMode="numeric" min={1} value={e.sets} onChange={(v) => setEx(i, { sets: Math.round(v) })} /></label>
                 <label className="field"><span>Reps min</span>
-                  <input type="number" inputMode="numeric" value={e.repMin} onChange={(ev) => setEx(i, { repMin: n(ev.target.value, 1) })} /></label>
+                  <NumInput inputMode="numeric" min={1} value={e.repMin} onChange={(v) => setEx(i, { repMin: Math.round(v) })} /></label>
                 <label className="field"><span>Reps max</span>
-                  <input type="number" inputMode="numeric" value={e.repMax} onChange={(ev) => setEx(i, { repMax: n(ev.target.value, 1) })} /></label>
+                  <NumInput inputMode="numeric" min={1} value={e.repMax} onChange={(v) => setEx(i, { repMax: Math.round(v) })} /></label>
                 <label className="field"><span>{state.unit}</span>
                   <input type="number" inputMode="decimal" step="any" value={e.weight ?? ''} onChange={(ev) => setEx(i, { weight: opt(ev.target.value) })} /></label>
                 <label className="field" style={{ gridColumn: 'span 2' }}><span>Target effort</span>
@@ -188,14 +188,14 @@ export function WorkoutEditor<T extends Editable>({
             ) : findExercise(e.exerciseId, state.customExercises)?.timeUnit === 'sec' ? (
               <div className="grid2" style={{ marginTop: 8 }}>
                 <label className="field"><span>Reps</span>
-                  <input type="number" inputMode="numeric" value={e.sets} onChange={(ev) => setEx(i, { sets: Math.max(1, n(ev.target.value, 1)) })} /></label>
+                  <NumInput inputMode="numeric" min={1} value={e.sets} onChange={(v) => setEx(i, { sets: Math.round(v) })} /></label>
                 <label className="field"><span>Distance (m)</span>
                   <input type="number" inputMode="decimal" step="any" value={e.distance ?? ''} onChange={(ev) => setEx(i, { distance: opt(ev.target.value) })} /></label>
               </div>
             ) : (
               <div className="grid2" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginTop: 8 }}>
                 <label className="field"><span>Rounds</span>
-                  <input type="number" inputMode="numeric" value={e.sets} onChange={(ev) => setEx(i, { sets: Math.max(1, n(ev.target.value, 1)) })} /></label>
+                  <NumInput inputMode="numeric" min={1} value={e.sets} onChange={(v) => setEx(i, { sets: Math.round(v) })} /></label>
                 <label className="field"><span>Minutes</span>
                   <input type="number" inputMode="decimal" step="any" value={e.minutes ?? ''} onChange={(ev) => setEx(i, { minutes: opt(ev.target.value) })} /></label>
                 <label className="field"><span>Distance ({state.distanceUnit})</span>

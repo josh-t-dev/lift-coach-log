@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
+import { NumInput } from '../components/NumInput';
 import { allExercises, cardio as makeCardio, exerciseName, metricOf } from '../data/exercises';
 import { blockWeek, isoDate } from '../lib/analytics';
 import { defaultPrinciples } from '../lib/evidence';
@@ -202,8 +203,8 @@ export function Plan() {
             {MUSCLES.map((m) => (
               <label key={m}>
                 {m}
-                <input type="number" inputMode="numeric" min={0} max={30} value={plan.setTargets[m]}
-                  onChange={(e) => editPlan((x) => void (x.setTargets[m] = Math.max(0, Math.min(40, Number(e.target.value) || 0))))} />
+                <NumInput inputMode="numeric" min={0} max={40} value={plan.setTargets[m]}
+                  onChange={(v) => editPlan((x) => void (x.setTargets[m] = Math.round(v)))} />
               </label>
             ))}
           </div>
@@ -217,7 +218,7 @@ export function Plan() {
             </select>
           </label>
           <label className="field"><span>Cardio minutes / week</span>
-            <input type="number" inputMode="numeric" min={0} value={plan.cardioMinutes} onChange={(e) => editPlan((x) => void (x.cardioMinutes = Math.max(0, Number(e.target.value) || 0)))} />
+            <NumInput inputMode="numeric" min={0} value={plan.cardioMinutes} onChange={(v) => editPlan((x) => void (x.cardioMinutes = Math.round(v)))} />
           </label>
         </div>
         <p className="small muted">Rep ranges and effort apply when days are rebuilt; edit a day to change its exercises directly.</p>
@@ -238,9 +239,9 @@ function RangeField({ label, value, onChange }: { label: string; value: [number,
   return (
     <label className="field"><span>{label}</span>
       <div className="row" style={{ gap: 4 }}>
-        <input type="number" inputMode="numeric" aria-label={`${label} min`} value={value[0]} onChange={(e) => onChange([Math.max(1, Number(e.target.value) || 1), value[1]])} />
+        <NumInput inputMode="numeric" min={1} aria-label={`${label} min`} value={value[0]} onChange={(v) => onChange([Math.round(v), value[1]])} />
         <span className="muted">–</span>
-        <input type="number" inputMode="numeric" aria-label={`${label} max`} value={value[1]} onChange={(e) => onChange([value[0], Math.max(1, Number(e.target.value) || 1)])} />
+        <NumInput inputMode="numeric" min={1} aria-label={`${label} max`} value={value[1]} onChange={(v) => onChange([value[0], Math.round(v)])} />
       </div>
     </label>
   );
@@ -463,7 +464,7 @@ function Activities({ plan }: { plan: BasePlan }) {
           </div>
           <div className="grid2">
             <label className="field"><span>Minutes</span>
-              <input type="number" inputMode="numeric" min={5} value={a.minutes} onChange={(e) => edit(a.id, (x) => void (x.minutes = Math.max(0, Number(e.target.value) || 0)))} />
+              <NumInput inputMode="numeric" min={1} value={a.minutes} onChange={(v) => edit(a.id, (x) => void (x.minutes = Math.round(v)))} />
             </label>
             <label className="field"><span>Intensity</span>
               <select value={a.intensity} onChange={(e) => edit(a.id, (x) => void (x.intensity = e.target.value as Intensity))}>
