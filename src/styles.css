@@ -223,9 +223,13 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .weeks .col > i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); }
 .weeks .w.cur .col { outline: 1px dashed var(--muted); }
 
-.plan-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
-.plan-days > div { min-width: 0; overflow-wrap: break-word; -webkit-hyphens: auto; hyphens: auto; font-size: 10.5px; padding: 6px 2px; }
-.plan-days > div { background: var(--surface-2); border-radius: 8px; padding: 6px 4px; text-align: center; font-size: 11px; min-height: 58px; }
+.week-strip { display: flex; flex-direction: column; gap: 4px; }
+.plan-days { display: grid; gap: 4px; }
+.plan-days.wk5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.plan-days.wk2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.plan-days > div.today { outline: 2px solid var(--accent); outline-offset: -2px; }
+.plan-days > div { min-width: 0; overflow-wrap: break-word; -webkit-hyphens: auto; hyphens: auto; font-size: 12px; padding: 6px 3px; line-height: 1.3; }
+.plan-days > div { background: var(--surface-2); border-radius: 8px; text-align: center; min-height: 52px; }
 .plan-days > div.train { background: var(--accent-soft); }
 .plan-days b { display: block; font-size: 12px; margin-bottom: 2px; }
 

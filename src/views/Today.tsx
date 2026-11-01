@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
-import type { AppState, TemplateExercise } from '../types';
+import type { AppState, TemplateExercise, WeekPlanDay } from '../types';
 import { blockWeek, isoDate, snapshot } from '../lib/analytics';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend } from '../lib/llm';
@@ -176,15 +176,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
               {rec.planName && <div className="small muted" style={{ marginBottom: 4 }}>From your plan: <button className="btn small ghost" style={{ padding: 0, minHeight: 0 }} onClick={goPlan}>{rec.planName}</button></div>}
               <p className="small">{rec.summary}</p>
             </div>
-            <div className="plan-days">
-              {rec.weekPlan.map((d, i) => (
-                <div key={i} className={`${/rest|walk|off/i.test(d.focus) || d.focus === d.activity ? '' : 'train'} ${d.activity ? 'activity' : ''}`}>
-                  <b>{shortDay(d.day)}</b>
-                  {d.focus.replace(/ \d+ min/g, '')}
-                  {d.activity && d.activity !== d.focus && <i>+ {d.activity.replace(/ \d+ min/g, '')}</i>}
-                </div>
-              ))}
-            </div>
+            <WeekStrip days={rec.weekPlan} />
             <div>
               <h3>{rec.weekPlan[0] && !rec.weekPlan[0].focus.split(' + ').includes(rec.today.name) ? 'Next session' : 'Today'}: {rec.today.name}</h3>
               <ul className="list">
@@ -263,12 +255,6 @@ function summarize(names: string[], max = 4): string {
   return names.length <= max ? names.join(' · ') : `${names.slice(0, max).join(' · ')} +${names.length - max} more`;
 }
 
-/** "Today (Sun)" → "Today", "Wednesday" → "Wed". Keeps the 7-day strip narrow. */
-function shortDay(label: string): string {
-  if (/^today/i.test(label)) return 'Today';
-  const m = label.match(/^(mon|tue|wed|thu|fri|sat|sun)/i);
-  return m ? m[1][0].toUpperCase() + m[1].slice(1, 3).toLowerCase() : label.slice(0, 5);
-}
 
 /** "80 kg · RPE 8" for loaded lifts; nothing for bodyweight drills. */
 function loadText(e: TemplateExercise, state: AppState): string {
@@ -276,4 +262,40 @@ function loadText(e: TemplateExercise, state: AppState): string {
   const loaded = ex && ex.equipment !== 'bodyweight';
   const parts = [e.weight != null ? `${e.weight} ${state.unit}` : loaded ? 'find weight' : '', e.rpe != null ? `RPE ${e.rpe}` : ''];
   return parts.filter(Boolean).join(' · ');
+}
+
+const WD3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Weekday (0 = Sun) for a plan label like "Today (Sun)", "Mon" or "Wednesday". */
+function weekdayOf(label: string): number {
+  const m = label.match(/(sun|mon|tue|wed|thu|fri|sat)/i);
+  if (m) return WD3.findIndex((w) => w.toLowerCase() === m[1].toLowerCase());
+  return /^today/i.test(label) ? new Date().getDay() : -1;
+}
+
+/** The week as two rows: Mon–Fri, then Sat–Sun. Today is highlighted. */
+function WeekStrip({ days }: { days: WeekPlanDay[] }) {
+  const today = new Date().getDay();
+  const byDay = new Map<number, WeekPlanDay>();
+  for (const d of days) {
+    const w = weekdayOf(d.day);
+    if (w >= 0 && !byDay.has(w)) byDay.set(w, d);
+  }
+  const cell = (w: number) => {
+    const d = byDay.get(w);
+    const rest = !d || /rest|walk|off/i.test(d.focus) || d.focus === d.activity;
+    return (
+      <div key={w} className={`${rest ? '' : 'train'} ${d?.activity ? 'activity' : ''} ${w === today ? 'today' : ''}`}>
+        <b>{w === today ? 'Today' : WD3[w]}</b>
+        {d ? d.focus.replace(/ \d+ min/g, '') : '—'}
+        {d?.activity && d.activity !== d.focus && <i>+ {d.activity.replace(/ \d+ min/g, '')}</i>}
+      </div>
+    );
+  };
+  return (
+    <div className="week-strip" aria-label="This week">
+      <div className="plan-days wk5">{[1, 2, 3, 4, 5].map(cell)}</div>
+      <div className="plan-days wk2">{[6, 0].map(cell)}</div>
+    </div>
+  );
 }
