@@ -254,3 +254,7 @@ ul.bullets li { margin-bottom: 4px; font-size: 14px; }
 .rest .rest-time { font-weight: 600; font-variant-numeric: tabular-nums; }
 .rest .rest-name { opacity: .7; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
 .sets td:nth-child(5) { width: 52px; }
+
+/* Plan header actions: three equal buttons that never overlap */
+.plan-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.plan-actions .btn { min-width: 0; padding: 9px 4px; font-size: 15px; white-space: normal; text-align: center; }

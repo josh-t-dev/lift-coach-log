@@ -88,8 +88,8 @@ export function Plan() {
           adjusts for how your training has actually gone.
         </p>
         <WeekNotes plan={plan} />
-        <div className="row wrap">
-          <button className="btn grow" onClick={() => setNewBlock(true)}>Start a new block…</button>
+        <div className="plan-actions">
+          <button className="btn" onClick={() => setNewBlock(true)}>New Plan</button>
           <PlanFileButtons />
         </div>
       </div>
@@ -331,8 +331,8 @@ function NewBlockDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="modal-back" onClick={onClose}>
-      <div className="modal stack" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Start a new block">
-        <h2>Start a new training block</h2>
+      <div className="modal stack" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New plan">
+        <h2>New plan</h2>
         <p className="small muted">"{state.plan.name}" will be saved under Past blocks so you can look back or restore it.</p>
         <label className="field"><span>Name</span>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
@@ -354,7 +354,7 @@ function NewBlockDialog({ onClose }: { onClose: () => void }) {
         </div>
         <div className="row">
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary grow" onClick={create}>Start block</button>
+          <button className="btn primary grow" onClick={create}>Start new plan</button>
         </div>
       </div>
     </div>
@@ -533,8 +533,8 @@ function PlanFileButtons() {
         a.download = `${state.plan.name.replace(/[^\w-]+/g, '-').toLowerCase() || 'plan'}.json`;
         a.click();
         URL.revokeObjectURL(a.href);
-      }}>Export plan</button>
-      <button className="btn" onClick={() => input.current?.click()}>Import plan</button>
+      }}>Export</button>
+      <button className="btn" onClick={() => input.current?.click()}>Import</button>
       <input ref={input} type="file" accept="application/json" hidden onChange={async (e) => {
         const f = e.target.files?.[0];
         e.target.value = '';
