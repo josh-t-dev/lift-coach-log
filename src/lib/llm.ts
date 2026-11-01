@@ -8,9 +8,9 @@
  */
 import { allExercises, findExercise, metricOf } from '../data/exercises';
 import type { BasePlan, EvidenceLevel, Exercise, LlmSettings, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
-import { exerciseHistory, isWorkingSet } from './analytics';
+import { addDays, exerciseHistory, isWorkingSet } from './analytics';
 import { principlesText } from './evidence';
-import { activityLabel, availableExercises, isDaily, isPinned, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
+import { activityLabel, availableExercises, isDaily, isPinned, planWithRules, startablePlanDay, type PlannerInput, type PlannerOutput } from './planner';
 import { chat } from './providers';
 
 export { DEFAULT_LLM } from './providers';
@@ -29,9 +29,10 @@ Rules:
 - Start from BASELINE (the base plan day with this week's progressed loads already worked out). Use its weights unless you have a data-backed reason; use null when unknown.
 - Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
-- "today" is the main session in BASELINE.today. Never return a "daily" routine (e.g. a morning routine) as today's workout; the app shows routines separately.
-- weekPlan has exactly 7 entries starting with TODAY, using short day names (Sun, Mon, Tue…). The app keeps fixed-weekday days on their weekdays regardless.
-- BASE_PLAN days with fixed weekdays stay on those weekdays. "daily" days are routines done every day. Each exercise's "thisWeek" is the prescription for the current week of the block and overrides its default sets/reps; put it in the exercise note.
+- weekPlan has exactly 7 entries starting with TODAY, using short day names (Sun, Mon, Tue…). Start from BASELINE.weekPlan.
+- You may adjust THIS WEEK ONLY when there is a reason (missed sessions, the user's drop order, fatigue, a hard game, the user's request): skip a session by setting that day's focus to "Rest", or move a session to another day. Use the BASE_PLAN day names exactly; never invent sessions. Sports/activities are fixed — never move or remove them. Leave all other days exactly as in BASELINE.weekPlan, and make the summary match the weekPlan you return.
+- "today" is the session on today's weekPlan entry (use its exact BASE_PLAN day name). If today is a rest day, return the next scheduled session and say so. Never return a "daily" routine (e.g. a morning routine) as today's workout; the app shows routines separately.
+- BASE_PLAN days with fixed weekdays are the default schedule. "daily" days are routines done every day. Each exercise's "thisWeek" is the prescription for the current week of the block and overrides its default sets/reps; put it in the exercise note.
 - If STATUS.missedThisWeek lists sessions, don't schedule make-up sessions on top of the week; apply the user's own rules (e.g. a drop order or minimum viable week) and say what to skip or merge.
 - Effort is RPE on a 1–10 scale (10 = no reps left, 8 = about 2 reps left). Prescribe "rpe" per exercise.
 - BASE_PLAN.weeklyActivities are fixed sports/activities. Keep them in the weekPlan on their days, schedule lifting around them, avoid heavy lower-body lifting the day before a hard activity, and count their minutes toward cardio.
@@ -231,20 +232,34 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
       note: str(o.note, 200) || undefined,
     });
   }
-  // Fixed-weekday plans: the schedule is the user's, not the model's. Keep the
-  // planner's week, and keep today's session unless the model is adjusting a
-  // real (non-daily) plan day.
-  const hasFixed = input.plan.days.some(isPinned);
   const aiName = str(today.name, 60);
-  const matchedDay = input.plan.days.find((d) => aiName && aiName.toLowerCase().includes(d.name.toLowerCase()));
-  const useBaseToday = hasFixed && (!matchedDay || isDaily(matchedDay) || !exercises.length);
-  if (!useBaseToday && !exercises.length) throw new Error('Model plan had no recognisable exercises');
-
   const aiWeek: WeekPlanDay[] = (Array.isArray(d.weekPlan) ? d.weekPlan : [])
     .map((p) => (p && typeof p === 'object' ? (p as Record<string, unknown>) : {}))
     .map((p) => ({ day: str(p.day, 30), focus: str(p.focus, 80), activity: str(p.activity, 80) || undefined }))
     .filter((p) => p.day && p.focus)
     .slice(0, 7);
+
+  let weekPlan: WeekPlanDay[];
+  let todayOut: Recommendation['today'];
+  if (input.plan.days.some(isPinned)) {
+    // Fixed-weekday plan: the base plan is the default, and the model may adjust
+    // this week only, by skipping or moving real plan sessions. Sports stay put.
+    weekPlan = mergeWeek(input, base, aiWeek);
+    const now = input.now ?? new Date();
+    const off = weekPlan.findIndex((w) => sessionsIn(input.plan, w.focus).length > 0);
+    const dayName = off === -1 ? undefined : sessionsIn(input.plan, weekPlan[off].focus)[0];
+    const planDay = input.plan.days.find((x) => x.name === dayName);
+    const aiMatches = !!dayName && aiName.toLowerCase().includes(dayName.toLowerCase()) && exercises.length > 0;
+    if (aiMatches) todayOut = { name: aiName, exercises };
+    else if (planDay) {
+      const built = startablePlanDay(planDay, input.plan, input.unit, input.sessions, input.customExercises, addDays(now, off));
+      todayOut = { name: built.name, exercises: built.exercises };
+    } else todayOut = base.recommendation.today;
+  } else {
+    if (!exercises.length) throw new Error('Model plan had no recognisable exercises');
+    weekPlan = aiWeek.length === 7 ? aiWeek : base.recommendation.weekPlan;
+    todayOut = { name: aiName || base.recommendation.today.name, exercises };
+  }
 
   const rationale = (Array.isArray(d.rationale) ? d.rationale : []).map((x) => str(x)).filter(Boolean).slice(0, 6);
 
@@ -256,8 +271,8 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
     headline: str(d.headline, 90) || base.recommendation.headline,
     summary: str(d.summary, 600) || base.recommendation.summary,
     rationale: rationale.length ? rationale : base.recommendation.rationale,
-    weekPlan: hasFixed || aiWeek.length !== 7 ? base.recommendation.weekPlan : aiWeek,
-    today: useBaseToday ? base.recommendation.today : { name: aiName || base.recommendation.today.name, exercises },
+    weekPlan,
+    today: todayOut,
   };
 }
 
@@ -340,4 +355,51 @@ export async function suggestRules(plan: BasePlan, settings: LlmSettings, reques
   if (!settings.enabled || !settings.model) throw new Error('The AI coach is turned off in Settings');
   const reply = await chat(settings, buildRuleSystemPrompt(), buildRuleUserPrompt(plan, request, custom), signal);
   return parseRuleSuggestions(extractJson(reply));
+}
+
+const WEEKDAY3 = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/** Weekday (0 = Sun) named by a label like "Today", "Mon" or "Wednesday". */
+function weekdayOfLabel(label: string, now: Date): number {
+  const m = label.toLowerCase().match(/(sun|mon|tue|wed|thu|fri|sat)/);
+  if (m) return WEEKDAY3.indexOf(m[1]);
+  return /today/i.test(label) ? now.getDay() : -1;
+}
+
+/** Real (non-daily) plan sessions named in a schedule entry, longest names first. */
+function sessionsIn(plan: BasePlan, focus: string): string[] {
+  let rest = focus.toLowerCase();
+  const found: string[] = [];
+  for (const d of plan.days.filter((x) => !isDaily(x)).sort((a, b) => b.name.length - a.name.length)) {
+    const n = d.name.toLowerCase();
+    if (rest.includes(n)) {
+      found.push(d.name);
+      rest = rest.replace(n, ' ');
+    }
+  }
+  return found;
+}
+
+/**
+ * This week's schedule for a fixed-weekday plan: start from the planner's
+ * week and apply the model's day-by-day changes when they name real plan
+ * sessions (moved) or a rest day / sport only (skipped). Anything else keeps
+ * the planned day. Sports always stay on their days.
+ */
+function mergeWeek(input: PlannerInput, base: PlannerOutput, aiWeek: WeekPlanDay[]): WeekPlanDay[] {
+  const now = input.now ?? new Date();
+  const plan = input.plan;
+  return base.recommendation.weekPlan.map((planned, off) => {
+    const wd = (now.getDay() + off) % 7;
+    const ai = aiWeek.find((x) => weekdayOfLabel(x.day, now) === wd);
+    if (!ai) return planned;
+    const acts = (plan.activities ?? []).filter((a) => a.weekdays.includes(wd));
+    const actLabel = acts.map((a) => activityLabel(a, input.customExercises)).join(' + ') || undefined;
+    const names = sessionsIn(plan, ai.focus);
+    const actNames = acts.map((a) => (findExercise(a.exerciseId, input.customExercises)?.name ?? a.exerciseId).toLowerCase());
+    const onlySportOrRest = /\b(rest|off|recover|recovery)\b/i.test(ai.focus) || actNames.some((n) => ai.focus.toLowerCase().includes(n));
+    if (names.length) return { day: planned.day, focus: names.join(' + '), activity: actLabel };
+    if (onlySportOrRest) return { day: planned.day, focus: actLabel ?? 'Rest / easy cardio', activity: actLabel };
+    return planned;
+  });
 }

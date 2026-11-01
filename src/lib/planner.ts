@@ -214,7 +214,10 @@ export function progressDay(day: PlanDay, plan: BasePlan, unit: Unit, sessions: 
   const exercises = day.exercises.map(withWeek).map((e) => {
     const ex = findExercise(e.exerciseId, custom);
     if (metricOf(e, custom) === 'time_distance') {
-      const minutes = e.minutes ? Math.max(5, Math.round((e.minutes * snap.adjustment.volumeFactor) / 5) * 5) : e.minutes;
+      // Scale cardio after a break (to the nearest 5 min); leave short timed drills as written.
+      const minutes = !e.minutes || snap.adjustment.volumeFactor === 1 || e.minutes < 10
+        ? e.minutes
+        : Math.max(5, Math.round((e.minutes * snap.adjustment.volumeFactor) / 5) * 5);
       return { ...e, sets: Math.max(1, e.sets), minutes };
     }
     const sets = Math.max(1, Math.round(e.sets * snap.adjustment.volumeFactor));

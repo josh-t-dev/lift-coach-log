@@ -557,7 +557,7 @@ describe('AI replies on fixed-weekday plans', () => {
   };
   const inp = { ...input, plan: fixedPlan, now: SUN };
 
-  it('keeps the planned week and main session when the model rearranges them', () => {
+  it('ignores garbled days and routines, but applies a deliberate rest day', () => {
     const base = planWithRules(inp);
     const reply = {
       headline: 'You missed last week', summary: 'S', rationale: ['r'],
@@ -567,15 +567,18 @@ describe('AI replies on fixed-weekday plans', () => {
     const rec = parseRecommendation(reply, inp, base, 'openai/gpt-oss-20b');
     expect(rec.source).toBe('llm');
     expect(rec.headline).toBe('You missed last week');
-    expect(rec.weekPlan).toEqual(base.recommendation.weekPlan);
+    // Sunday wasn't in the reply, "Something" isn't a plan session → planned days kept.
+    expect(rec.weekPlan[0]).toEqual(base.recommendation.weekPlan[0]);
     expect(rec.weekPlan[0].focus).toBe('Easy Run');
-    expect(rec.weekPlan.find((d) => d.day === 'Thu')?.focus).toBe('Upper');
+    expect(rec.weekPlan.find((d) => d.day === 'Mon')?.focus).toBe('Sprints + Plyos');
+    // Thursday "Rest" is an explicit skip.
+    expect(rec.weekPlan.find((d) => d.day === 'Thu')?.focus).toBe('Rest / easy cardio');
     expect(rec.today.name).toBe('Easy Run');
   });
 
   it('lets the model adjust a real plan day, without inventing RPE for drills', () => {
     const base = planWithRules(inp);
-    const reply = { today: { name: 'Upper (shortened)', exercises: [
+    const reply = { weekPlan: [{ day: 'Today', focus: 'Upper' }], today: { name: 'Upper (shortened)', exercises: [
       { exerciseId: 'bench-press', sets: 3, repMin: 4, repMax: 6, rpe: 7.5 },
       { exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3, rpe: 8 },
       { exerciseId: 'face-pull', sets: 2, repMin: 15, repMax: 15 },
@@ -583,5 +586,78 @@ describe('AI replies on fixed-weekday plans', () => {
     const rec = parseRecommendation(reply, inp, base, 'm');
     expect(rec.today.name).toBe('Upper (shortened)');
     expect(rec.today.exercises.map((e) => e.rpe)).toEqual([7.5, undefined, undefined]);
+  });
+});
+
+describe('AI adjusting this week of a fixed plan', () => {
+  const SUN = new Date(2026, 10, 1, 18);
+  const p: BasePlan = {
+    ...plan,
+    startDate: '2026-10-12', reviewDate: '2026-11-23',
+    activities: [{ id: 'b', exerciseId: 'basketball', weekdays: [3], minutes: 60, intensity: 'hard' }],
+    days: [
+      { id: 'r', name: 'Morning Routine', weekdays: [0, 1, 2, 3, 4, 5, 6], exercises: [{ exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3 }] },
+      { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [{ exerciseId: 'accel-sprint', metric: 'time_distance', sets: 6, repMin: 0, repMax: 0, distance: 20 }] },
+      { id: 'w', name: 'Lower A', weekdays: [3], exercises: [{ exerciseId: 'trap-bar-deadlift', sets: 4, repMin: 3, repMax: 5 }] },
+      { id: 't', name: 'Upper', weekdays: [4], exercises: [{ exerciseId: 'bench-press', sets: 4, repMin: 4, repMax: 6 }] },
+      { id: 's', name: 'Easy Run', weekdays: [0], exercises: [{ exerciseId: 'easy-run', metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: 40 }] },
+    ],
+  };
+  const inp = { ...input, plan: p, now: SUN };
+
+  it('applies "rest today" and "skip Wednesday\'s lift", keeps basketball, and serves the next session', () => {
+    const base = planWithRules(inp);
+    const reply = {
+      headline: 'Rest today – sprint week starts tomorrow',
+      weekPlan: [
+        { day: 'Today', focus: 'Rest' },
+        { day: 'Mon', focus: 'Sprints + Plyos' },
+        { day: 'Tue', focus: 'Rest' },
+        { day: 'Wed', focus: 'Basketball' },
+        { day: 'Thu', focus: 'Upper' },
+        { day: 'Fri', focus: 'Rest' },
+        { day: 'Sat', focus: 'Rest' },
+      ],
+      today: { name: 'Rest day', exercises: [] },
+    };
+    const rec = parseRecommendation(reply, inp, base, 'm');
+    expect(rec.weekPlan.map((d) => d.focus)).toEqual(['Rest / easy cardio', 'Sprints + Plyos', 'Rest / easy cardio', 'Basketball 60 min', 'Upper', 'Rest / easy cardio', 'Rest / easy cardio']);
+    expect(rec.weekPlan[3].activity).toBe('Basketball 60 min');
+    expect(rec.today.name).toBe('Sprints + Plyos');
+    expect(rec.today.exercises[0].exerciseId).toBe('accel-sprint');
+  });
+
+  it('allows moving a real session, rejects invented ones, and uses the model\'s version of today', () => {
+    const base = planWithRules(inp);
+    const reply = {
+      weekPlan: [
+        { day: 'Sun', focus: 'Easy Run' },
+        { day: 'Tue', focus: 'Hot yoga + sauna' },
+        { day: 'Thu', focus: 'Rest' },
+        { day: 'Fri', focus: 'Upper' },
+      ],
+      today: { name: 'Easy Run (short)', exercises: [{ exerciseId: 'easy-run', minutes: 25 }] },
+    };
+    const rec = parseRecommendation(reply, inp, base, 'm');
+    const by = Object.fromEntries(rec.weekPlan.map((d) => [d.day.replace(/^Today \((\w+)\)$/, '$1'), d.focus]));
+    expect(by.Tue).toBe(base.recommendation.weekPlan[2].focus); // invented session ignored
+    expect(by.Thu).toBe('Rest / easy cardio');
+    expect(by.Fri).toBe('Upper');
+    expect(by.Wed).toBe('Lower A'); // untouched day kept
+    expect(rec.today).toMatchObject({ name: 'Easy Run (short)', exercises: [{ exerciseId: 'easy-run', minutes: 25 }] });
+  });
+});
+
+describe('timed drills', () => {
+  it('keeps short drills as written and only scales real cardio after a break', () => {
+    const p: BasePlan = { ...plan, days: [{ id: 'd', name: 'D', exercises: [
+      { exerciseId: 'diaphragmatic-breathing', metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: 2 },
+      { exerciseId: 'easy-run', metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: 40 },
+    ] }] };
+    const fresh = planWithRules({ ...input, plan: p }).recommendation.today.exercises.map((e) => e.minutes);
+    expect(fresh).toEqual([2, 40]);
+    const back = planWithRules({ ...input, plan: p, sessions: [session(40, 'D', [['bench-press', 3, 80, 8]])] }).recommendation.today.exercises.map((e) => e.minutes);
+    expect(back[0]).toBe(2);
+    expect(back[1]).toBeLessThan(40);
   });
 });

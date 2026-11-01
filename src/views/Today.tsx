@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
-import type { AppState, TemplateExercise, WeekPlanDay } from '../types';
+import type { AppState, Recommendation, TemplateExercise, WeekPlanDay } from '../types';
 import { blockWeek, isoDate, snapshot } from '../lib/analytics';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend } from '../lib/llm';
@@ -178,7 +178,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
             </div>
             <WeekStrip days={rec.weekPlan} />
             <div>
-              <h3>{rec.weekPlan[0] && !rec.weekPlan[0].focus.split(' + ').includes(rec.today.name) ? 'Next session' : 'Today'}: {rec.today.name}</h3>
+              <h3>{nextLabel(rec)}: {rec.today.name}</h3>
               <ul className="list">
                 {rec.today.exercises.map((e, i) => (
                   <li key={i} className="row spread">
@@ -188,7 +188,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
                     </div>
                     {metricOf(e, state.customExercises) === 'time_distance' ? (
                       <div className="small" style={{ textAlign: 'right' }}>
-                        {[e.minutes ? `${e.minutes} min` : '', e.distance ? `${e.distance} ${state.distanceUnit}` : ''].filter(Boolean).join(' · ') || 'time & distance'}
+                        {timedTarget(e, state) || 'time & distance'}
                       </div>
                     ) : (
                       <div className="small" style={{ textAlign: 'right' }}>
@@ -298,4 +298,20 @@ function WeekStrip({ days }: { days: WeekPlanDay[] }) {
       <div className="plan-days wk2">{[6, 0].map(cell)}</div>
     </div>
   );
+}
+
+/** "Today" when today's scheduled session is the one shown, else "Next session (Mon)". */
+function nextLabel(rec: Recommendation): string {
+  const has = (d?: WeekPlanDay) => !!d && d.focus.split(' + ').some((f) => rec.today.name.toLowerCase().startsWith(f.toLowerCase()));
+  if (has(rec.weekPlan[0])) return 'Today';
+  const idx = rec.weekPlan.findIndex(has);
+  const day = idx > 0 ? rec.weekPlan[idx].day.replace(/^Today \((\w+)\)$/, '$1').slice(0, 3) : '';
+  return day ? `Next session (${day})` : 'Next session';
+}
+
+/** "40 min · 8 km" for runs, "6 × 20 m" for sprints. */
+function timedTarget(e: TemplateExercise, state: AppState): string {
+  const ex = findExercise(e.exerciseId, state.customExercises);
+  if (ex?.distUnit === 'm') return e.distance ? `${e.sets} × ${e.distance} m` : `${e.sets} reps`;
+  return [e.minutes ? `${e.minutes} min` : '', e.distance ? `${e.distance} ${state.distanceUnit}` : ''].filter(Boolean).join(' · ');
 }
