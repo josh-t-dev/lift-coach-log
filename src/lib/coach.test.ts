@@ -507,3 +507,37 @@ describe('evidence-based rule suggestions', () => {
     expect(buildSystemPrompt(withRule)).toContain('[evidence-based rule added by the user, evidence: strong] Copenhagens 2×/week (Source: Harøy 2019)');
   });
 });
+
+describe('empty replies from thinking models', () => {
+  const s: LlmSettings = { enabled: true, api: 'openai', preset: 'ollama', baseUrl: 'http://x/v1', model: 'qwen3:8b', apiKey: '', jsonMode: true };
+  const good = { headline: 'H', summary: 'S', rationale: ['r'], weekPlan: [], today: { name: 'T', exercises: [{ exerciseId: 'back-squat', sets: 3, repMin: 5, repMax: 5 }] } };
+  const reply = (message: object, finish_reason = 'stop') => new Response(JSON.stringify({ choices: [{ message, finish_reason }] }));
+
+  it('retries without JSON mode when the answer comes back empty', async () => {
+    const f = vi.fn().mockResolvedValueOnce(reply({ content: '' })).mockResolvedValueOnce(reply({ content: JSON.stringify(good) }));
+    vi.stubGlobal('fetch', f);
+    const rec = await recommend(input, s);
+    vi.unstubAllGlobals();
+    expect(rec.source).toBe('llm');
+    const [first, second] = f.mock.calls.map((c) => JSON.parse(c[1].body));
+    expect(first.response_format).toEqual({ type: 'json_object' });
+    expect(second.response_format).toBeUndefined();
+    expect(first.max_tokens).toBe(8192);
+  });
+
+  it('uses JSON found in a separate reasoning field', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ content: null, reasoning: 'thinking… ' + JSON.stringify(good) })));
+    const rec = await recommend(input, { ...s, jsonMode: false });
+    vi.unstubAllGlobals();
+    expect(rec.source).toBe('llm');
+    expect(rec.headline).toBe('H');
+  });
+
+  it('explains when the model ran out of output space', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ content: '<think>long…</think>' }, 'length')));
+    const rec = await recommend(input, { ...s, jsonMode: false });
+    vi.unstubAllGlobals();
+    expect(rec.source).toBe('rules');
+    expect(rec.warning).toMatch(/ran out of output space/);
+  });
+});

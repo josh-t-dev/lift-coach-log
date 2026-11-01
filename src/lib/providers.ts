@@ -204,6 +204,8 @@ async function chatOpenAI(s: LlmSettings, system: string, user: string, signal?:
       { role: 'user', content: user },
     ],
     temperature: 0.3,
+    // Room for thinking models to reason *and* answer; some providers default much lower.
+    max_tokens: 8192,
     stream: false,
   };
   if (json) body.response_format = { type: 'json_object' };
@@ -220,9 +222,25 @@ async function chatOpenAI(s: LlmSettings, system: string, user: string, signal?:
     throw new Error(`Model server returned ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
   }
   const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('The model returned an empty reply');
-  return content;
+  const choice = data?.choices?.[0];
+  const msg = choice?.message ?? {};
+  const content = typeof msg.content === 'string' ? msg.content : '';
+  if (content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()) return content;
+  // Thinking models sometimes put everything in a separate reasoning field.
+  const reasoning = [msg.reasoning_content, msg.reasoning].find((x) => typeof x === 'string' && x.includes('{')) as string | undefined;
+  if (reasoning && /\{[\s\S]*\}/.test(reasoning)) return reasoning;
+  throw new EmptyReplyError(choice?.finish_reason);
+}
+
+/** The server answered but the model produced no usable text. */
+export class EmptyReplyError extends Error {
+  constructor(public finishReason?: string) {
+    super(
+      finishReason === 'length'
+        ? 'The model ran out of output space before answering (it likely spent it thinking). Try a different or larger model.'
+        : `The model returned an empty reply${finishReason ? ` (finish reason: ${finishReason})` : ''}. Try turning off "Request JSON output" or picking a different model.`,
+    );
+  }
 }
 
 /** Send one system + user prompt and return the text reply. */
@@ -231,8 +249,10 @@ export async function chat(s: LlmSettings, system: string, user: string, signal?
   try {
     return await chatOpenAI(s, system, user, signal);
   } catch (e) {
-    // Some servers reject response_format; retry once without it.
-    if (s.jsonMode && e instanceof Error && /\b(400|422)\b/.test(e.message)) return chatOpenAI(s, system, user, signal, false);
+    // Some servers reject response_format, and some thinking models return an
+    // empty answer in JSON mode; retry once without it.
+    const rejected = e instanceof Error && /\b(400|422)\b/.test(e.message);
+    if (s.jsonMode && (rejected || e instanceof EmptyReplyError)) return chatOpenAI(s, system, user, signal, false);
     throw e;
   }
 }
