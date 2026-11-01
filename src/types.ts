@@ -187,6 +187,17 @@ export interface WeekPlanDay {
   focus: string;
   /** Sport/activity planned that day, e.g. "Volleyball 60 min". */
   activity?: string;
+  /** The coach changed this day from the base plan this week. */
+  changed?: boolean;
+}
+
+/** One change the coach made to this week, with its evidence-based reason. */
+export interface PlanChange {
+  day: string;
+  change: string;
+  reason: string;
+  /** The principle or user rule it follows. */
+  principle?: string;
 }
 
 export interface Recommendation {
@@ -199,6 +210,8 @@ export interface Recommendation {
   summary: string;
   rationale: string[];
   weekPlan: WeekPlanDay[];
+  /** Changes from the base plan, each with its reason. */
+  changes?: PlanChange[];
   today: { name: string; exercises: TemplateExercise[] };
   /** Set when the LLM was tried but we fell back to rules. */
   warning?: string;

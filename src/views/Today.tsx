@@ -177,6 +177,20 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
               <p className="small">{rec.summary}</p>
             </div>
             <WeekStrip days={rec.weekPlan} />
+            {rec.changes?.length ? (
+              <div className="changes">
+                <h3>What the coach changed this week</h3>
+                <ul className="bullets">
+                  {rec.changes.map((c, i) => (
+                    <li key={i}>
+                      <b>{c.day.replace(/^Today \((\w+)\)$/, '$1')}</b> · {c.change} — {c.reason}
+                      {c.principle && <span className="muted"> (follows: {c.principle})</span>}
+                    </li>
+                  ))}
+                </ul>
+                <p className="small muted" style={{ margin: '4px 0 0' }}>Your base plan is unchanged; next week starts from it again.</p>
+              </div>
+            ) : null}
             <div>
               <h3>{nextLabel(rec)}: {rec.today.name}</h3>
               <ul className="list">
@@ -285,7 +299,8 @@ function WeekStrip({ days }: { days: WeekPlanDay[] }) {
     const d = byDay.get(w);
     const rest = !d || /rest|walk|off/i.test(d.focus) || d.focus === d.activity;
     return (
-      <div key={w} className={`${rest ? '' : 'train'} ${d?.activity ? 'activity' : ''} ${w === today ? 'today' : ''}`}>
+      <div key={w} className={`${rest ? '' : 'train'} ${d?.activity ? 'activity' : ''} ${w === today ? 'today' : ''} ${d?.changed ? 'changed' : ''}`}
+        title={d?.changed ? 'Changed by the coach this week' : undefined}>
         <b>{w === today ? 'Today' : WD3[w]}</b>
         {d ? d.focus.replace(/ \d+ min/g, '') : '—'}
         {d?.activity && d.activity !== d.focus && <i>+ {d.activity.replace(/ \d+ min/g, '')}</i>}
@@ -296,6 +311,7 @@ function WeekStrip({ days }: { days: WeekPlanDay[] }) {
     <div className="week-strip" aria-label="This week">
       <div className="plan-days wk5">{[1, 2, 3, 4, 5].map(cell)}</div>
       <div className="plan-days wk2">{[6, 0].map(cell)}</div>
+      {days.some((d) => d.changed) && <p className="small muted" style={{ margin: 0 }}><span className="changed-dot" /> changed by the coach this week</p>}
     </div>
   );
 }

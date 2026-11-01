@@ -661,3 +661,65 @@ describe('timed drills', () => {
     expect(back[1]).toBeLessThan(40);
   });
 });
+
+describe('coach changes with reasons', () => {
+  const SUN = new Date(2026, 10, 1, 18);
+  const p: BasePlan = {
+    ...plan, startDate: '2026-10-12', reviewDate: '2026-11-23',
+    activities: [{ id: 'b', exerciseId: 'basketball', weekdays: [3], minutes: 60, intensity: 'hard' }],
+    days: [
+      { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [{ exerciseId: 'accel-sprint', metric: 'time_distance', sets: 6, repMin: 0, repMax: 0, distance: 20 }] },
+      { id: 'w', name: 'Lower A', weekdays: [3], exercises: [{ exerciseId: 'trap-bar-deadlift', sets: 4, repMin: 3, repMax: 5 }] },
+      { id: 't', name: 'Upper', weekdays: [4], exercises: [{ exerciseId: 'bench-press', sets: 4, repMin: 4, repMax: 6 }, { exerciseId: 'pull-up', sets: 4, repMin: 4, repMax: 8 }] },
+      { id: 's', name: 'Easy Run', weekdays: [0], exercises: [{ exerciseId: 'easy-run', metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: 40 }] },
+    ],
+  };
+  const inp = { ...input, plan: p, now: SUN };
+  const base = () => planWithRules(inp);
+
+  it('accepts a shortened session and a justified new one, shows reasons, marks changed days', () => {
+    const reply = {
+      weekPlan: [
+        { day: 'Today', focus: 'Recovery: mobility + easy bike 20 min' },
+        { day: 'Wed', focus: 'Basketball' },
+        { day: 'Thu', focus: 'Upper (short)' },
+      ],
+      changes: [
+        { day: 'Sun', change: 'Easy run → recovery session', reason: 'Poor sleep and a hard week; keep it light.', principle: 'Sleep <6 h rule' },
+        { day: 'Wed', change: 'Skipped Lower A', reason: 'Keep legs fresh for a hard basketball game.', principle: 'Drop order' },
+        { day: 'Thu', change: 'Upper shortened', reason: 'Only 25 min available.' },
+        { day: 'Fri', change: '', reason: 'missing change text is dropped' },
+      ],
+      today: { name: 'Recovery: mobility + easy bike 20 min', exercises: [{ exerciseId: 'bike', minutes: 20 }, { exerciseId: 'worlds-greatest', minutes: 5 }] },
+    };
+    const rec = parseRecommendation(reply, inp, base(), 'm');
+    expect(rec.weekPlan[0]).toMatchObject({ focus: 'Recovery: mobility + easy bike 20 min', changed: true });
+    expect(rec.weekPlan.find((d) => d.day === 'Wed')).toMatchObject({ focus: 'Basketball 60 min', changed: true });
+    expect(rec.weekPlan.find((d) => d.day === 'Thu')).toMatchObject({ focus: 'Upper (short)', changed: true });
+    expect(rec.weekPlan.find((d) => d.day === 'Mon')?.changed).toBeUndefined();
+    expect(rec.today.name).toBe('Recovery: mobility + easy bike 20 min');
+    expect(rec.today.exercises.map((e) => e.exerciseId)).toEqual(['bike', 'worlds-greatest']);
+    expect(rec.changes?.map((c) => c.day)).toEqual(['Sun', 'Wed', 'Thu']);
+    expect(rec.changes?.[1].principle).toBe('Drop order');
+  });
+
+  it("ignores a new session that has no stated reason", () => {
+    const reply = { weekPlan: [{ day: 'Today', focus: 'Hot yoga + sauna' }], today: { name: 'Hot yoga', exercises: [{ exerciseId: 'yoga', minutes: 60 }] } };
+    const rec = parseRecommendation(reply, inp, base(), 'm');
+    expect(rec.weekPlan[0].focus).toBe('Easy Run');
+    expect(rec.weekPlan[0].changed).toBeUndefined();
+    expect(rec.today.name).toBe('Easy Run');
+  });
+
+  it('uses the shortened version of today when the model sends it', () => {
+    const THU = new Date(2026, 10, 5, 7);
+    const reply = {
+      weekPlan: [{ day: 'Today', focus: 'Upper (short)' }],
+      changes: [{ day: 'Thu', change: 'Upper shortened', reason: 'Only 25 minutes today.', principle: 'Session length' }],
+      today: { name: 'Upper (short)', exercises: [{ exerciseId: 'bench-press', sets: 3, repMin: 4, repMax: 6, rpe: 8 }, { exerciseId: 'pull-up', sets: 2, repMin: 4, repMax: 8 }] },
+    };
+    const rec = parseRecommendation(reply, { ...inp, now: THU }, planWithRules({ ...inp, now: THU }), 'm');
+    expect(rec.today.name).toBe('Upper (short)');
+    expect(rec.today.exercises.map((e) => e.sets)).toEqual([3, 2]);
+  });
+});
