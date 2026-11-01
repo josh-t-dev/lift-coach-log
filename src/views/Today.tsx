@@ -4,6 +4,7 @@ import { exerciseName, metricOf } from '../data/exercises';
 import { blockWeek, isoDate, snapshot } from '../lib/analytics';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend } from '../lib/llm';
+import { presetOf } from '../lib/providers';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Muscle } from '../types';
 
@@ -148,8 +149,15 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
 
         {!rec && (
           <p className="small muted" style={{ marginTop: 6 }}>
-            Get this week's schedule and today's workout, built from your base plan "{plan.name}" and adjusted for how your training has gone.
-            {state.llm.enabled ? ` Uses ${state.llm.model} at ${state.llm.baseUrl}.` : ' AI is off, so the built-in planner will be used.'}
+            Get this week's schedule and today's workout, built from your base plan and adjusted for how your training has gone.
+            <br />
+            Plan: <button className="link" onClick={goPlan}>{plan.name}</button>
+            {' · '}
+            {state.llm.enabled ? (
+              <>AI: <button className="link" onClick={goSettings}>{presetOf(state.llm).label.split(' — ')[0]} · {state.llm.model}</button></>
+            ) : (
+              <>AI: <button className="link" onClick={goSettings}>off (built-in planner)</button></>
+            )}
           </p>
         )}
 
