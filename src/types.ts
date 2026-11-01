@@ -1,4 +1,5 @@
 export type Unit = 'kg' | 'lb';
+export type DistanceUnit = 'km' | 'mi';
 
 export const MUSCLES = [
   'chest',
@@ -17,6 +18,13 @@ export type Muscle = (typeof MUSCLES)[number];
 export const EQUIPMENT = ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'] as const;
 export type Equipment = (typeof EQUIPMENT)[number];
 
+/** How an exercise is logged. */
+export type Metric = 'weight_reps' | 'time_distance';
+export const METRIC_LABEL: Record<Metric, string> = {
+  weight_reps: 'Weight & reps',
+  time_distance: 'Time & distance',
+};
+
 export interface Exercise {
   id: string;
   name: string;
@@ -27,6 +35,9 @@ export interface Exercise {
   compound: boolean;
   /** Lower-body lifts progress in bigger increments. */
   lowerBody: boolean;
+  metric: Metric;
+  /** Aerobic work, counted toward weekly cardio minutes. */
+  cardio?: boolean;
   custom?: boolean;
 }
 
@@ -36,15 +47,20 @@ export interface SetLog {
   reps: number | null;
   /** Reps in reserve (how many more reps you could have done). Optional. */
   rir: number | null;
+  durationSec?: number | null;
+  /** In the user's distance unit. */
+  distance?: number | null;
   done: boolean;
 }
 
 export interface ExerciseLog {
   id: string;
   exerciseId: string;
+  /** Overrides the exercise's default way of logging. */
+  metric?: Metric;
   sets: SetLog[];
   /** Target carried over from a template/plan, shown as a hint. */
-  target?: { repMin: number; repMax: number; rir?: number };
+  target?: { repMin: number; repMax: number; rir?: number; minutes?: number | null; distance?: number | null };
   note?: string;
 }
 
@@ -60,12 +76,16 @@ export interface Session {
 
 export interface TemplateExercise {
   exerciseId: string;
+  metric?: Metric;
   sets: number;
   repMin: number;
   repMax: number;
   rir?: number;
   /** Suggested working weight in the user's unit. */
   weight?: number | null;
+  /** Time & distance targets. */
+  minutes?: number | null;
+  distance?: number | null;
   note?: string;
 }
 
@@ -88,16 +108,44 @@ export interface Profile {
   notes: string;
 }
 
-export interface LlmSettings {
+export interface PlanPrinciple {
+  id: string;
+  rule: string;
+  source: string;
   enabled: boolean;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  /** Ask the server for JSON output (`response_format: json_object`). */
-  jsonMode: boolean;
+  /** Written by the user rather than taken from the evidence base. */
+  custom?: boolean;
 }
 
 export interface PlanDay {
+  id: string;
+  name: string;
+  exercises: TemplateExercise[];
+}
+
+/**
+ * The user's program for a training block (e.g. a quarter or a year).
+ * Every coach request starts from this.
+ */
+export interface BasePlan {
+  id: string;
+  name: string;
+  startDate: string; // YYYY-MM-DD
+  reviewDate: string; // YYYY-MM-DD
+  /** Set when the block is archived. */
+  endDate?: string;
+  updatedAt: string;
+  profile: Profile;
+  /** Weekly hard-set target per muscle. */
+  setTargets: Record<Muscle, number>;
+  repRanges: { compound: [number, number]; isolation: [number, number] };
+  rir: number;
+  cardioMinutes: number;
+  principles: PlanPrinciple[];
+  days: PlanDay[];
+}
+
+export interface WeekPlanDay {
   day: string;
   focus: string;
 }
@@ -107,19 +155,31 @@ export interface Recommendation {
   source: 'llm' | 'rules';
   /** The model name when source is 'llm'. */
   model?: string;
+  planName?: string;
   headline: string;
   summary: string;
   rationale: string[];
-  weekPlan: PlanDay[];
+  weekPlan: WeekPlanDay[];
   today: { name: string; exercises: TemplateExercise[] };
   /** Set when the LLM was tried but we fell back to rules. */
   warning?: string;
 }
 
+export interface LlmSettings {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  /** Ask the server for JSON output (`response_format: json_object`). */
+  jsonMode: boolean;
+}
+
 export interface AppState {
-  version: 1;
+  version: 2;
   unit: Unit;
-  profile: Profile;
+  distanceUnit: DistanceUnit;
+  plan: BasePlan;
+  planHistory: BasePlan[];
   llm: LlmSettings;
   templates: Template[];
   sessions: Session[];

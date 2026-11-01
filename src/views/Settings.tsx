@@ -1,11 +1,10 @@
 import { useRef, useState } from 'react';
 import { chat, listModels, SUGGESTED_MODELS } from '../lib/llm';
 import { exportJson, hydrate, initialState, replaceState, update, useAppState } from '../store';
-import { EQUIPMENT, type Experience, type Goal, type Unit } from '../types';
+import type { DistanceUnit, Unit } from '../types';
 
 export function Settings() {
   const state = useAppState();
-  const p = state.profile;
   const llm = state.llm;
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -39,53 +38,22 @@ export function Settings() {
       <h2>Settings</h2>
 
       <div className="card stack">
-        <h3>Your training</h3>
+        <h3>Units</h3>
+        <p className="small muted">Your goal, schedule, equipment and targets are on the Plan tab.</p>
         <div className="grid2">
-          <label className="field"><span>Goal</span>
-            <select value={p.goal} onChange={(e) => update((d) => void (d.profile.goal = e.target.value as Goal))}>
-              <option value="hypertrophy">Build muscle</option>
-              <option value="strength">Get stronger</option>
-              <option value="general">General fitness</option>
-            </select>
-          </label>
-          <label className="field"><span>Experience</span>
-            <select value={p.experience} onChange={(e) => update((d) => void (d.profile.experience = e.target.value as Experience))}>
-              <option value="beginner">Beginner (&lt;1 yr)</option>
-              <option value="intermediate">Intermediate (1–3 yrs)</option>
-              <option value="advanced">Advanced (3+ yrs)</option>
-            </select>
-          </label>
-          <label className="field"><span>Days per week</span>
-            <select value={p.daysPerWeek} onChange={(e) => update((d) => void (d.profile.daysPerWeek = Number(e.target.value)))}>
-              {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
-            </select>
-          </label>
-          <label className="field"><span>Session length</span>
-            <select value={p.sessionMinutes} onChange={(e) => update((d) => void (d.profile.sessionMinutes = Number(e.target.value)))}>
-              {[30, 45, 60, 75, 90].map((n) => <option key={n} value={n}>{n} min</option>)}
-            </select>
-          </label>
-          <label className="field"><span>Units</span>
+          <label className="field"><span>Weight</span>
             <select value={state.unit} onChange={(e) => update((d) => void (d.unit = e.target.value as Unit))}>
               <option value="kg">kg</option>
               <option value="lb">lb</option>
             </select>
           </label>
+          <label className="field"><span>Distance</span>
+            <select value={state.distanceUnit} onChange={(e) => update((d) => void (d.distanceUnit = e.target.value as DistanceUnit))}>
+              <option value="km">km</option>
+              <option value="mi">miles</option>
+            </select>
+          </label>
         </div>
-        <div>
-          <span className="muted small">Equipment you have</span>
-          <div className="chips" style={{ marginTop: 4 }}>
-            {EQUIPMENT.map((x) => (
-              <button key={x} className={`chip ${p.equipment.includes(x) ? 'on' : ''}`}
-                onClick={() => update((d) => void (d.profile.equipment = p.equipment.includes(x) ? p.equipment.filter((y) => y !== x) : [...p.equipment, x]))}>
-                {x}
-              </button>
-            ))}
-          </div>
-        </div>
-        <label className="field"><span>Notes for the coach (injuries, preferences, priorities)</span>
-          <textarea value={p.notes} placeholder="e.g. Left knee is cranky with deep lunges. Want bigger shoulders." onChange={(e) => update((d) => void (d.profile.notes = e.target.value))} />
-        </label>
       </div>
 
       <div className="card stack">
@@ -113,6 +81,15 @@ export function Settings() {
         <button className="btn" onClick={runTest} disabled={testing}>{testing ? <><span className="spinner" /> Testing…</> : 'Test connection'}</button>
         {test && <div className={`banner ${test.ok ? 'info' : 'warn'}`}>{test.msg}</div>}
         {models.length > 0 && <p className="small muted">Models on server: {models.join(', ')}</p>}
+        <details>
+          <summary className="small" style={{ cursor: 'pointer' }}>How to set it up (5 minutes)</summary>
+          <ol className="bullets">
+            <li>Install Ollama from <b>ollama.com</b> on your computer (Mac, Windows or Linux).</li>
+            <li>In a terminal run <code>ollama pull qwen3:8b</code> (about a 5 GB download).</li>
+            <li>Keep Ollama running, then tap <b>Test connection</b> above.</li>
+            <li>Using the app on your phone? On the computer, quit Ollama and start it with <code>OLLAMA_HOST=0.0.0.0 OLLAMA_ORIGINS="*" ollama serve</code>, then set Server URL to <code>http://&lt;computer IP&gt;:11434/v1</code>.</li>
+          </ol>
+        </details>
         <details>
           <summary className="small" style={{ cursor: 'pointer' }}>Suggested models</summary>
           <ul className="bullets">{SUGGESTED_MODELS.map((m) => <li key={m.id}><code>{m.id}</code> — {m.note}</li>)}</ul>

@@ -1,19 +1,21 @@
 import { useMemo, useRef, useState } from 'react';
-import { exerciseName } from '../data/exercises';
+import { BarList } from '../components/Charts';
+import { exerciseName, metricOf } from '../data/exercises';
 import { isoDate, snapshot } from '../lib/analytics';
-import { PRINCIPLES } from '../lib/evidence';
 import { recommend } from '../lib/llm';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Muscle } from '../types';
 
 const SHOWN_MUSCLES: Muscle[] = ['chest', 'back', 'shoulders', 'quads', 'hamstrings', 'glutes', 'biceps', 'triceps'];
 
-export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSettings: () => void }) {
+export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void; goSettings: () => void; goPlan: () => void }) {
   const state = useAppState();
   const [loading, setLoading] = useState(false);
   const [request, setRequest] = useState('');
   const abort = useRef<AbortController | null>(null);
-  const snap = useMemo(() => snapshot(state.sessions, state.profile, state.customExercises), [state.sessions, state.profile, state.customExercises]);
+  const plan = state.plan;
+  const snap = useMemo(() => snapshot(state.sessions, plan, state.customExercises), [state.sessions, plan, state.customExercises]);
+  const reviewDue = plan.reviewDate <= isoDate(new Date());
   const rec = state.recommendation;
   const stale = rec && isoDate(new Date(rec.createdAt)) !== isoDate(new Date());
 
@@ -24,7 +26,7 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
     setLoading(true);
     try {
       const r = await recommend(
-        { profile: state.profile, unit: state.unit, sessions: state.sessions, customExercises: state.customExercises },
+        { plan, unit: state.unit, distanceUnit: state.distanceUnit, sessions: state.sessions, customExercises: state.customExercises },
         state.llm,
         request,
         ctl.signal,
@@ -43,7 +45,7 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
     goWorkout();
   };
 
-  const maxWeek = Math.max(state.profile.daysPerWeek, ...snap.weeks.map((w) => w.sessions));
+  const maxWeek = Math.max(plan.profile.daysPerWeek, ...snap.weeks.map((w) => w.sessions));
 
   return (
     <div className="stack">
@@ -57,11 +59,18 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
         </div>
       )}
 
+      {reviewDue && (
+        <div className="banner warn row spread">
+          <span>Your plan "{plan.name}" is due for review.</span>
+          <button className="btn small" onClick={goPlan}>Review plan</button>
+        </div>
+      )}
+
       {/* Where you stand — computed locally, always up to date */}
       <div className="card">
         <div className="row spread">
           <h2 style={{ margin: 0 }}>This week</h2>
-          <span className="tag">{snap.thisWeek.sessions}/{state.profile.daysPerWeek} sessions</span>
+          <span className="tag">{snap.thisWeek.sessions}/{plan.profile.daysPerWeek} sessions</span>
         </div>
         <p className="small" style={{ marginTop: 4 }}>{snap.statusText}</p>
         <div className="weeks" aria-label="Sessions per week, last 5 weeks">
@@ -72,16 +81,13 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
             </div>
           ))}
         </div>
-        <h3 style={{ marginTop: 14 }}>Hard sets this week <span className="muted small">(target {snap.setTarget.min}–{snap.setTarget.max})</span></h3>
-        <div className="bars">
-          {SHOWN_MUSCLES.map((m) => {
-            const v = snap.thisWeek.setsPerMuscle[m];
-            const scale = snap.setTarget.max * 1.2;
-            return (
-              <FragmentRow key={m} label={m} value={v} pct={Math.min(100, (v / scale) * 100)} target={(snap.setTarget.min / scale) * 100} />
-            );
-          })}
-        </div>
+        <h3 style={{ marginTop: 14 }}>Hard sets this week <span className="muted small">(tick = plan target)</span></h3>
+        <BarList rows={SHOWN_MUSCLES.map((m) => ({ label: m, value: snap.thisWeek.setsPerMuscle[m], target: snap.setTargets[m] }))} />
+        {snap.cardioTarget > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <BarList rows={[{ label: 'Cardio min', value: snap.thisWeek.cardioMinutes, target: snap.cardioTarget }]} />
+          </div>
+        )}
       </div>
 
       {/* Coach */}
@@ -93,7 +99,7 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
 
         {!rec && (
           <p className="small muted" style={{ marginTop: 6 }}>
-            Get a plan for this week and today, based on your history and training research.
+            Get this week's schedule and today's workout, built from your base plan "{plan.name}" and adjusted for how your training has gone.
             {state.llm.enabled ? ` Uses ${state.llm.model} at ${state.llm.baseUrl}.` : ' AI is off, so the built-in planner will be used.'}
           </p>
         )}
@@ -109,6 +115,7 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
             {stale && <div className="banner info">This plan is from {new Date(rec.createdAt).toLocaleDateString()}. Refresh for today.</div>}
             <div>
               <h3 style={{ fontSize: 17 }}>{rec.headline}</h3>
+              {rec.planName && <div className="small muted" style={{ marginBottom: 4 }}>From your plan: <button className="btn small ghost" style={{ padding: 0, minHeight: 0 }} onClick={goPlan}>{rec.planName}</button></div>}
               <p className="small">{rec.summary}</p>
             </div>
             <div className="plan-days">
@@ -128,10 +135,16 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
                       <div>{exerciseName(e.exerciseId, state.customExercises)}</div>
                       {e.note && <div className="small muted">{e.note}</div>}
                     </div>
-                    <div className="small" style={{ textAlign: 'right' }}>
-                      {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
-                      <div className="muted">{e.weight != null ? `${e.weight} ${state.unit}` : 'find weight'}{e.rir != null ? ` · RIR ${e.rir}` : ''}</div>
-                    </div>
+                    {metricOf(e, state.customExercises) === 'time_distance' ? (
+                      <div className="small" style={{ textAlign: 'right' }}>
+                        {[e.minutes ? `${e.minutes} min` : '', e.distance ? `${e.distance} ${state.distanceUnit}` : ''].filter(Boolean).join(' · ') || 'time & distance'}
+                      </div>
+                    ) : (
+                      <div className="small" style={{ textAlign: 'right' }}>
+                        {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
+                        <div className="muted">{e.weight != null ? `${e.weight} ${state.unit}` : 'find weight'}{e.rir != null ? ` · RIR ${e.rir}` : ''}</div>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -182,25 +195,7 @@ export function Today({ goWorkout, goSettings }: { goWorkout: () => void; goSett
         </div>
       </div>
 
-      <details className="card">
-        <summary style={{ cursor: 'pointer' }}><b>The evidence behind the coach</b></summary>
-        <ul className="bullets">
-          {PRINCIPLES.map((p) => (
-            <li key={p.id}>{p.rule} <span className="muted">— {p.source}</span></li>
-          ))}
-        </ul>
-        <p className="small muted" style={{ marginTop: 8 }}>General fitness guidance, not medical advice.</p>
-      </details>
+      <button className="btn block ghost" onClick={goPlan}>Edit your base plan & the evidence behind it →</button>
     </div>
-  );
-}
-
-function FragmentRow({ label, value, pct, target }: { label: string; value: number; pct: number; target: number }) {
-  return (
-    <>
-      <span style={{ textTransform: 'capitalize' }}>{label}</span>
-      <div className="bar"><i style={{ width: `${pct}%` }} /><b style={{ left: `${target}%` }} /></div>
-      <span className="muted" style={{ textAlign: 'right' }}>{Number.isInteger(value) ? value : value.toFixed(1)}</span>
-    </>
   );
 }

@@ -6,9 +6,9 @@
  * its system prompt, plus a computed snapshot of the user's training and
  * a rule-based baseline plan, and must answer with JSON we validate.
  */
-import { allExercises, findExercise } from '../data/exercises';
-import type { Exercise, LlmSettings, PlanDay, Recommendation, TemplateExercise } from '../types';
-import { exerciseHistory } from './analytics';
+import { allExercises, findExercise, metricOf } from '../data/exercises';
+import type { BasePlan, Exercise, LlmSettings, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
+import { exerciseHistory, isWorkingSet } from './analytics';
 import { principlesText } from './evidence';
 import { availableExercises, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
 
@@ -28,21 +28,22 @@ export const SUGGESTED_MODELS = [
   { id: 'llama3.1:8b', note: 'Fast and widely supported' },
 ];
 
-export function buildSystemPrompt(): string {
-  return `You are an evidence-based strength coach inside a workout tracking app.
+export function buildSystemPrompt(plan: BasePlan): string {
+  return `You are an evidence-based strength and conditioning coach inside a workout tracking app.
 
-Plan training using these research-backed principles, in priority order of evidence. Do not contradict them:
-${principlesText()}
+The user's training principles for this block. The research-backed ones come with sources; rules marked [user's own rule] are the user's personal preferences and must be respected unless they would clearly be unsafe:
+${principlesText(plan.principles)}
 
 Rules:
-- Base every recommendation on the user's actual data provided (status, adherence, weekly sets, recent loads). Never invent history.
-- Start from the BASELINE plan. Keep it unless the data or the user's notes give a reason to change it; explain any change.
+- The user's BASE_PLAN ("${plan.name}") is their chosen program for this training block. Build the week from its days in order, and base today's workout on one BASE_PLAN day.
+- Keep the BASE_PLAN's exercises, sets and rep ranges unless the user's status (time off), their request, or one of their rules requires a change. Explain every change in the rationale.
+- Start from BASELINE (the base plan day with this week's progressed loads already worked out). Use its weights unless you have a data-backed reason; use null when unknown.
+- Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
-- Weights are in the user's unit. Use the baseline's suggested weights unless you have a data-backed reason; use null when unknown.
-- Never prescribe "making up" missed sessions by cramming extra volume. After time off, reduce load/volume as the principles say.
+- Exercises with metric "time_distance" (cardio, carries) use "minutes" and "distance" (in the user's distance unit) instead of reps and weight. Count cardio minutes toward the weekly cardio target.
+- Never prescribe "making up" missed sessions by cramming extra volume. After time off, reduce load and volume as the principles say.
 - Be direct and encouraging. The headline speaks to the user (e.g. "You missed last week — here's this week").
-- Keep the session within the user's session length.
-- You are not a medical provider: if the user's notes mention pain or injury, keep it conservative and suggest seeing a professional.
+- You are not a medical provider: if the user mentions pain or injury, keep it conservative and suggest seeing a professional.
 
 Reply with ONLY a JSON object, no markdown, matching:
 {
@@ -52,15 +53,33 @@ Reply with ONLY a JSON object, no markdown, matching:
   "weekPlan": [{"day": string, "focus": string}],  // the next 7 days starting today
   "today": {
     "name": string,
-    "exercises": [{"exerciseId": string, "sets": number, "repMin": number, "repMax": number, "rir": number, "weight": number|null, "note": string}]
+    "exercises": [{"exerciseId": string, "sets": number, "repMin": number, "repMax": number, "rir": number, "weight": number|null, "minutes": number|null, "distance": number|null, "note": string}]
   }
 }`;
 }
 
-export function buildUserPrompt(input: PlannerInput, base: PlannerOutput, request = ''): string {
-  const { profile, unit, sessions, customExercises } = input;
+/** Exercises the model may use: anything matching the equipment, plus anything already in the plan. */
+export function exercisePool(plan: BasePlan, custom: Exercise[]): Exercise[] {
+  const planIds = new Set(plan.days.flatMap((d) => d.exercises.map((e) => e.exerciseId)));
+  const avail = new Set(availableExercises(plan.profile, custom).map((e) => e.id));
+  return allExercises(custom).filter((e) => planIds.has(e.id) || avail.has(e.id));
+}
+
+function fmtSet(x: SetLog, metric: string): string {
+  if (metric === 'time_distance') return `${Math.round((x.durationSec ?? 0) / 6) / 10}min${x.distance ? ` ${x.distance}dist` : ''}`;
+  return `${x.weight ?? 0}x${x.reps}${x.rir != null ? `@RIR${x.rir}` : ''}`;
+}
+
+export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string }, base: PlannerOutput, request = ''): string {
+  const { plan, unit, sessions, customExercises } = input;
   const hist = exerciseHistory(sessions);
   const name = (id: string) => findExercise(id, customExercises)?.name ?? id;
+  const planEx = (e: TemplateExercise) => {
+    const m = metricOf(e, customExercises);
+    return m === 'time_distance'
+      ? { id: e.exerciseId, name: name(e.exerciseId), metric: m, minutes: e.minutes ?? null, distance: e.distance ?? null }
+      : { id: e.exerciseId, name: name(e.exerciseId), sets: e.sets, reps: `${e.repMin}-${e.repMax}`, rir: e.rir ?? plan.rir };
+  };
 
   const recent = [...sessions]
     .filter((s) => s.finishedAt)
@@ -70,22 +89,31 @@ export function buildUserPrompt(input: PlannerInput, base: PlannerOutput, reques
       date: s.startedAt.slice(0, 10),
       name: s.name,
       exercises: s.exercises
-        .map((e) => ({
-          exercise: name(e.exerciseId),
-          sets: e.sets.filter((x) => x.done && (x.reps ?? 0) > 0).map((x) => `${x.weight ?? 0}x${x.reps}${x.rir != null ? `@RIR${x.rir}` : ''}`),
-        }))
+        .map((e) => ({ exercise: name(e.exerciseId), sets: e.sets.filter(isWorkingSet).map((x) => fmtSet(x, metricOf(e, customExercises))) }))
         .filter((e) => e.sets.length),
     }));
 
   const lifts = [...hist.values()]
+    .filter((h) => h.lastSets.some((s) => s.reps > 0))
     .sort((a, b) => b.lastDate.localeCompare(a.lastDate))
     .slice(0, 20)
     .map((h) => ({ exercise: name(h.exerciseId), id: h.exerciseId, last: h.lastDate, lastSets: h.lastSets.map((s) => `${s.weight}x${s.reps}`), bestE1rm: h.bestE1rm }));
 
+  const pool = exercisePool(plan, customExercises);
+
   const ctx = {
     TODAY: base.snapshot.today,
-    UNIT: unit,
-    PROFILE: profile,
+    UNITS: { weight: unit, distance: input.distanceUnit ?? 'km' },
+    BASE_PLAN: {
+      name: plan.name,
+      block: `${plan.startDate} to ${plan.reviewDate}`,
+      profile: plan.profile,
+      weeklySetTargetsPerMuscle: plan.setTargets,
+      repRanges: plan.repRanges,
+      defaultRir: plan.rir,
+      weeklyCardioMinutesTarget: plan.cardioMinutes,
+      days: plan.days.map((d) => ({ name: d.name, exercises: d.exercises.map(planEx) })),
+    },
     STATUS: {
       status: base.snapshot.status,
       text: base.snapshot.statusText,
@@ -94,7 +122,7 @@ export function buildUserPrompt(input: PlannerInput, base: PlannerOutput, reques
       adherence4wk: base.snapshot.adherence4wk,
       thisWeekSetsPerMuscle: base.snapshot.thisWeek.setsPerMuscle,
       lastWeekSetsPerMuscle: base.snapshot.lastWeek.setsPerMuscle,
-      weeklySetTarget: base.snapshot.setTarget,
+      cardioMinutes: { thisWeek: base.snapshot.thisWeek.cardioMinutes, lastWeek: base.snapshot.lastWeek.cardioMinutes },
       returnAdjustment: base.snapshot.adjustment,
     },
     RECENT_SESSIONS: recent,
@@ -105,14 +133,14 @@ export function buildUserPrompt(input: PlannerInput, base: PlannerOutput, reques
       projectedWeeklySets: base.projected,
       today: {
         name: base.todayDetail.name,
-        exercises: base.todayDetail.exercises.map((e) => ({ ...e, name: name(e.exerciseId) })),
+        exercises: base.todayDetail.exercises.map((e) => ({ ...e, name: name(e.exerciseId), metric: metricOf(e, customExercises) })),
       },
     },
-    AVAILABLE_EXERCISES: availableExercises(profile, customExercises).map((e) => `${e.id} (${e.name}; ${e.primary.join('/')})`),
+    AVAILABLE_EXERCISES: pool.map((e) => `${e.id} (${e.name}; ${e.metric === 'time_distance' ? 'time_distance' : e.primary.join('/')})`),
   };
 
   const ask = request.trim() ? `\n\nMy request for today (follow it if it's consistent with the principles): ${request.trim()}` : '';
-  return `Here is my training data. Plan my week and today's workout.${ask}\n\n${JSON.stringify(ctx, null, 1)}`;
+  return `Here is my base plan and training data. Plan my week and today's workout.${ask}\n\n${JSON.stringify(ctx, null, 1)}`;
 }
 
 /** Pull a JSON object out of a model reply (handles <think> blocks and ``` fences). */
@@ -129,6 +157,11 @@ export function extractJson(text: string): unknown {
 const clamp = (n: unknown, lo: number, hi: number, dflt: number) => {
   const v = typeof n === 'number' && Number.isFinite(n) ? n : Number(n);
   return Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : dflt;
+};
+const optNum = (v: unknown, lo: number, hi: number): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : null;
 };
 const str = (v: unknown, max = 400) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
@@ -147,7 +180,7 @@ export function resolveExercise(raw: unknown, pool: Exercise[]): Exercise | unde
 export function parseRecommendation(data: unknown, input: PlannerInput, base: PlannerOutput, model: string): Recommendation {
   if (!data || typeof data !== 'object') throw new Error('Model reply is not an object');
   const d = data as Record<string, unknown>;
-  const pool = availableExercises(input.profile, input.customExercises);
+  const pool = exercisePool(input.plan, input.customExercises);
   const fullPool = allExercises(input.customExercises);
   const today = (d.today ?? {}) as Record<string, unknown>;
   const rawEx = Array.isArray(today.exercises) ? today.exercises : [];
@@ -163,6 +196,19 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
     const repMin = clamp(o.repMin, 1, 50, 8);
     const repMax = Math.max(repMin, clamp(o.repMax, 1, 60, repMin + 4));
     const w = o.weight === null || o.weight === undefined || o.weight === '' ? null : Number(o.weight);
+    if (ex.metric === 'time_distance' || o.metric === 'time_distance') {
+      exercises.push({
+        exerciseId: ex.id,
+        metric: 'time_distance',
+        sets: clamp(o.sets, 1, 10, 1),
+        repMin: 0,
+        repMax: 0,
+        minutes: optNum(o.minutes, 0, 600),
+        distance: optNum(o.distance, 0, 1000),
+        note: str(o.note, 200) || undefined,
+      });
+      continue;
+    }
     exercises.push({
       exerciseId: ex.id,
       sets: clamp(o.sets, 1, 8, 3),
@@ -175,7 +221,7 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
   }
   if (!exercises.length) throw new Error('Model plan had no recognisable exercises');
 
-  const weekPlan: PlanDay[] = (Array.isArray(d.weekPlan) ? d.weekPlan : [])
+  const weekPlan: WeekPlanDay[] = (Array.isArray(d.weekPlan) ? d.weekPlan : [])
     .map((p) => (p && typeof p === 'object' ? (p as Record<string, unknown>) : {}))
     .map((p) => ({ day: str(p.day, 30), focus: str(p.focus, 80) }))
     .filter((p) => p.day && p.focus)
@@ -187,6 +233,7 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
     createdAt: new Date().toISOString(),
     source: 'llm',
     model,
+    planName: input.plan.name,
     headline: str(d.headline, 90) || base.recommendation.headline,
     summary: str(d.summary, 600) || base.recommendation.summary,
     rationale: rationale.length ? rationale : base.recommendation.rationale,
@@ -227,11 +274,11 @@ export async function listModels(settings: LlmSettings): Promise<string[]> {
  * unreachable, or returns unusable output, the rule-based plan is returned
  * with a warning explaining why.
  */
-export async function recommend(input: PlannerInput, settings: LlmSettings, request = '', signal?: AbortSignal): Promise<Recommendation> {
+export async function recommend(input: PlannerInput & { distanceUnit?: string }, settings: LlmSettings, request = '', signal?: AbortSignal): Promise<Recommendation> {
   const base = planWithRules(input);
   if (!settings.enabled || !settings.model) return base.recommendation;
   const messages = [
-    { role: 'system', content: buildSystemPrompt() },
+    { role: 'system', content: buildSystemPrompt(input.plan) },
     { role: 'user', content: buildUserPrompt(input, base, request) },
   ];
   try {

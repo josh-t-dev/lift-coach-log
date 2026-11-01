@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from 'react';
+import { findExercise } from './data/exercises';
 import { DEFAULT_LLM } from './lib/llm';
-import type { AppState, ExerciseLog, Session, SetLog, Template, TemplateExercise } from './types';
+import { generateBasePlan } from './lib/planner';
+import type { AppState, BasePlan, Exercise, ExerciseLog, Profile, Session, SetLog, Template, TemplateExercise } from './types';
 
 const KEY = 'workout-tracker:v1';
 
@@ -8,18 +10,22 @@ export function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 
+export const DEFAULT_PROFILE: Profile = {
+  goal: 'hypertrophy',
+  experience: 'intermediate',
+  daysPerWeek: 3,
+  sessionMinutes: 60,
+  equipment: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'],
+  notes: '',
+};
+
 export function initialState(): AppState {
   return {
-    version: 1,
+    version: 2,
     unit: 'kg',
-    profile: {
-      goal: 'hypertrophy',
-      experience: 'intermediate',
-      daysPerWeek: 3,
-      sessionMinutes: 60,
-      equipment: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'],
-      notes: '',
-    },
+    distanceUnit: 'km',
+    plan: generateBasePlan(DEFAULT_PROFILE),
+    planHistory: [],
     llm: { ...DEFAULT_LLM },
     templates: [],
     sessions: [],
@@ -29,20 +35,32 @@ export function initialState(): AppState {
   };
 }
 
-/** Merge stored/imported data over defaults so new fields get sane values. */
+/**
+ * Merge stored/imported data over defaults so new fields get sane values.
+ * Version 1 kept a bare `profile`; it becomes the first Base Plan.
+ */
 export function hydrate(raw: unknown): AppState {
   const base = initialState();
   if (!raw || typeof raw !== 'object') return base;
-  const r = raw as Partial<AppState>;
+  const r = raw as Partial<AppState> & { profile?: Partial<Profile> };
+  const custom: Exercise[] = (Array.isArray(r.customExercises) ? r.customExercises : []).map((e) => ({ ...e, metric: e.metric ?? 'weight_reps' }));
+  const sessions = Array.isArray(r.sessions) ? r.sessions : [];
+  let plan: BasePlan;
+  if (r.plan && typeof r.plan === 'object') {
+    plan = { ...base.plan, ...r.plan, profile: { ...DEFAULT_PROFILE, ...r.plan.profile } };
+  } else {
+    plan = generateBasePlan({ ...DEFAULT_PROFILE, ...(r.profile ?? {}) }, { sessions, custom });
+  }
   return {
     ...base,
-    ...r,
-    version: 1,
-    profile: { ...base.profile, ...(r.profile ?? {}) },
+    unit: r.unit === 'lb' ? 'lb' : 'kg',
+    distanceUnit: r.distanceUnit === 'mi' ? 'mi' : r.distanceUnit === 'km' ? 'km' : r.unit === 'lb' ? 'mi' : 'km',
+    plan,
+    planHistory: Array.isArray(r.planHistory) ? r.planHistory : [],
     llm: { ...base.llm, ...(r.llm ?? {}) },
     templates: Array.isArray(r.templates) ? r.templates : [],
-    sessions: Array.isArray(r.sessions) ? r.sessions : [],
-    customExercises: Array.isArray(r.customExercises) ? r.customExercises : [],
+    sessions,
+    customExercises: custom,
     active: r.active ?? null,
     recommendation: r.recommendation ?? null,
   };
@@ -101,8 +119,9 @@ export function exerciseLogFrom(t: TemplateExercise): ExerciseLog {
   return {
     id: uid(),
     exerciseId: t.exerciseId,
+    metric: t.metric,
     sets: Array.from({ length: Math.max(1, t.sets) }, () => newSet(t.weight ?? null, null)),
-    target: { repMin: t.repMin, repMax: t.repMax, rir: t.rir },
+    target: { repMin: t.repMin, repMax: t.repMax, rir: t.rir, minutes: t.minutes, distance: t.distance },
     note: t.note,
   };
 }
@@ -121,17 +140,23 @@ export function startSession(name: string, exercises: TemplateExercise[], source
 }
 
 /** Turn a finished session into a reusable template. */
-export function templateFromSession(s: Session): Template {
+export function templateFromSession(s: Session, custom: Exercise[] = []): Template {
   return {
     id: uid(),
     name: s.name,
     updatedAt: new Date().toISOString(),
-    exercises: s.exercises.map((e) => {
+    exercises: s.exercises.map((e): TemplateExercise => {
       const done = e.sets.filter((x) => x.done);
+      if ((e.metric ?? findExercise(e.exerciseId, custom)?.metric) === 'time_distance') {
+        const sec = done.reduce((a, x) => a + (x.durationSec ?? 0), 0);
+        const dist = done.reduce((a, x) => a + (x.distance ?? 0), 0);
+        return { exerciseId: e.exerciseId, metric: e.metric, sets: Math.max(1, done.length), repMin: 0, repMax: 0, minutes: sec ? Math.round(sec / 60) : null, distance: dist || null };
+      }
       const reps = done.map((x) => x.reps ?? 0).filter((r) => r > 0);
       const weights = done.map((x) => x.weight ?? 0);
       return {
         exerciseId: e.exerciseId,
+        metric: e.metric,
         sets: Math.max(1, done.length || e.sets.length),
         repMin: e.target?.repMin ?? (reps.length ? Math.min(...reps) : 8),
         repMax: e.target?.repMax ?? (reps.length ? Math.max(...reps) : 12),

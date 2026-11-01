@@ -5,7 +5,7 @@
  * `principles` text is sent to the LLM as its system prompt so its
  * reasoning is anchored to the same guidelines.
  */
-import type { Experience, Goal } from '../types';
+import type { Experience, Goal, PlanPrinciple } from '../types';
 
 export interface Principle {
   id: string;
@@ -56,6 +56,12 @@ export const PRINCIPLES: Principle[] = [
     source: 'Bosquet et al. 2013 (Scand J Med Sci Sports); Ogasawara et al. 2013 (Eur J Appl Physiol)',
   },
   {
+    id: 'cardio',
+    rule:
+      'Aim for 150–300 minutes of moderate aerobic activity per week (or 75–150 vigorous). Combining cardio with lifting does not meaningfully blunt muscle growth or maximal strength; keep hard leg cardio away from heavy leg sessions if it hurts performance.',
+    source: 'WHO Guidelines on Physical Activity, 2020; Schumann et al. 2022 (Sports Med) concurrent-training meta-analysis',
+  },
+  {
     id: 'minimum',
     rule: 'Public-health minimum: muscle-strengthening activity involving all major muscle groups on 2 or more days per week.',
     source: 'WHO Guidelines on Physical Activity and Sedentary Behaviour, 2020',
@@ -88,6 +94,16 @@ export const RETURN_ADJUSTMENT = [
   { minDaysOff: 14, loadCut: 0.075, volumeFactor: 0.75, label: 'short break (2–3 weeks)' },
 ] as const;
 
-export function principlesText(): string {
-  return PRINCIPLES.map((p, i) => `${i + 1}. [${p.id}] ${p.rule} (Source: ${p.source})`).join('\n');
+/** Default weekly cardio minutes for a new plan. */
+export const CARDIO_MINUTES: Record<Goal, number> = { hypertrophy: 60, strength: 60, general: 150 };
+
+export function defaultPrinciples(): PlanPrinciple[] {
+  return PRINCIPLES.map((p) => ({ ...p, enabled: true }));
+}
+
+export function principlesText(principles: PlanPrinciple[] = defaultPrinciples()): string {
+  return principles
+    .filter((p) => p.enabled && p.rule.trim())
+    .map((p, i) => `${i + 1}. ${p.custom ? "[user's own rule] " : `[${p.id}] `}${p.rule.trim()}${p.source ? ` (Source: ${p.source})` : ''}`)
+    .join('\n');
 }

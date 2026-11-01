@@ -1,12 +1,12 @@
 /**
  * Deterministic analysis of the training log. Everything the coach knows
- * about "you" comes from here: weekly volume per muscle, adherence, time
- * off, and per-exercise performance with a suggested next load.
+ * about "you" comes from here: weekly volume per muscle, cardio minutes,
+ * adherence, time off, and per-exercise performance with a suggested next load.
  */
-import { findExercise } from '../data/exercises';
-import type { Exercise, Muscle, Profile, Session, SetLog, Unit } from '../types';
+import { findExercise, metricOf } from '../data/exercises';
+import type { BasePlan, Exercise, Metric, Muscle, Session, SetLog, Unit } from '../types';
 import { MUSCLES } from '../types';
-import { RETURN_ADJUSTMENT, WEEKLY_SET_TARGET } from './evidence';
+import { RETURN_ADJUSTMENT } from './evidence';
 
 const DAY_MS = 86_400_000;
 
@@ -30,9 +30,9 @@ export function finished(sessions: Session[]): Session[] {
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }
 
-/** A completed working set: ticked off with reps logged. */
+/** A completed set: ticked off with reps, time or distance logged. */
 export function isWorkingSet(s: SetLog): boolean {
-  return s.done && (s.reps ?? 0) > 0;
+  return s.done && ((s.reps ?? 0) > 0 || (s.durationSec ?? 0) > 0 || (s.distance ?? 0) > 0);
 }
 
 export function sessionsBetween(sessions: Session[], from: Date, to: Date): Session[] {
@@ -42,22 +42,37 @@ export function sessionsBetween(sessions: Session[], from: Date, to: Date): Sess
   });
 }
 
+export function emptyMuscles(): Record<Muscle, number> {
+  return Object.fromEntries(MUSCLES.map((m) => [m, 0])) as Record<Muscle, number>;
+}
+
 /**
  * Hard sets per muscle. A set counts 1 for each primary muscle and 0.5 for
  * each secondary muscle — the common "fractional set" convention.
  */
 export function setsPerMuscle(sessions: Session[], custom: Exercise[] = []): Record<Muscle, number> {
-  const out = Object.fromEntries(MUSCLES.map((m) => [m, 0])) as Record<Muscle, number>;
+  const out = emptyMuscles();
   for (const s of sessions) {
     for (const log of s.exercises) {
       const ex = findExercise(log.exerciseId, custom);
-      if (!ex) continue;
+      if (!ex || ex.cardio) continue;
       const n = log.sets.filter(isWorkingSet).length;
       for (const m of ex.primary) out[m] += n;
       for (const m of ex.secondary) out[m] += n * 0.5;
     }
   }
   return out;
+}
+
+/** Minutes of logged time on aerobic exercises. */
+export function cardioMinutes(sessions: Session[], custom: Exercise[] = []): number {
+  let sec = 0;
+  for (const s of sessions)
+    for (const log of s.exercises) {
+      if (!findExercise(log.exerciseId, custom)?.cardio) continue;
+      for (const x of log.sets) if (isWorkingSet(x)) sec += x.durationSec ?? 0;
+    }
+  return Math.round(sec / 60);
 }
 
 export type TrainingStatus =
@@ -81,19 +96,16 @@ export interface TrainingSnapshot {
   /** Last 4 full weeks (oldest first) plus the current week so far. */
   weeks: WeekSummary[];
   adherence4wk: number | null; // 0..1 over the last 4 full weeks
-  thisWeek: { sessions: number; setsPerMuscle: Record<Muscle, number> };
-  lastWeek: { sessions: number; setsPerMuscle: Record<Muscle, number> };
-  setTarget: { min: number; max: number };
+  thisWeek: { sessions: number; setsPerMuscle: Record<Muscle, number>; cardioMinutes: number };
+  lastWeek: { sessions: number; setsPerMuscle: Record<Muscle, number>; cardioMinutes: number };
+  setTargets: Record<Muscle, number>;
+  cardioTarget: number;
   /** Load cut and volume factor to apply this week (1 = normal). */
   adjustment: { loadCut: number; volumeFactor: number; reason: string | null };
 }
 
-export function snapshot(
-  sessions: Session[],
-  profile: Profile,
-  custom: Exercise[] = [],
-  now: Date = new Date(),
-): TrainingSnapshot {
+export function snapshot(sessions: Session[], plan: BasePlan, custom: Exercise[] = [], now: Date = new Date()): TrainingSnapshot {
+  const profile = plan.profile;
   const done = finished(sessions);
   const thisMon = weekStart(now);
   const weeks: WeekSummary[] = [];
@@ -147,9 +159,10 @@ export function snapshot(
     daysSinceLast,
     weeks,
     adherence4wk,
-    thisWeek: { sessions: thisWeekSessions.length, setsPerMuscle: setsPerMuscle(thisWeekSessions, custom) },
-    lastWeek: { sessions: lastWeekSessions.length, setsPerMuscle: setsPerMuscle(lastWeekSessions, custom) },
-    setTarget: WEEKLY_SET_TARGET[profile.experience],
+    thisWeek: { sessions: thisWeekSessions.length, setsPerMuscle: setsPerMuscle(thisWeekSessions, custom), cardioMinutes: cardioMinutes(thisWeekSessions, custom) },
+    lastWeek: { sessions: lastWeekSessions.length, setsPerMuscle: setsPerMuscle(lastWeekSessions, custom), cardioMinutes: cardioMinutes(lastWeekSessions, custom) },
+    setTargets: plan.setTargets,
+    cardioTarget: plan.cardioMinutes,
     adjustment: adj
       ? { loadCut: adj.loadCut, volumeFactor: adj.volumeFactor, reason: adj.label }
       : { loadCut: 0, volumeFactor: 1, reason: null },
@@ -163,22 +176,32 @@ export function e1rm(weight: number, reps: number): number {
   return weight * (1 + reps / 30);
 }
 
+export interface LoggedSet {
+  weight: number;
+  reps: number;
+  rir: number | null;
+  durationSec: number;
+  distance: number;
+}
+
 export interface ExerciseHistory {
   exerciseId: string;
   lastDate: string;
   /** Working sets from the most recent session with this exercise. */
-  lastSets: { weight: number; reps: number; rir: number | null }[];
+  lastSets: LoggedSet[];
   bestE1rm: number;
   sessions: number;
+}
+
+function toLogged(x: SetLog): LoggedSet {
+  return { weight: x.weight ?? 0, reps: x.reps ?? 0, rir: x.rir, durationSec: x.durationSec ?? 0, distance: x.distance ?? 0 };
 }
 
 export function exerciseHistory(sessions: Session[]): Map<string, ExerciseHistory> {
   const out = new Map<string, ExerciseHistory>();
   for (const s of finished(sessions)) {
     for (const log of s.exercises) {
-      const sets = log.sets
-        .filter(isWorkingSet)
-        .map((x) => ({ weight: x.weight ?? 0, reps: x.reps ?? 0, rir: x.rir }));
+      const sets = log.sets.filter(isWorkingSet).map(toLogged);
       if (!sets.length) continue;
       const prev = out.get(log.exerciseId);
       const best = Math.max(prev?.bestE1rm ?? 0, ...sets.map((x) => e1rm(x.weight, x.reps)));
@@ -206,7 +229,7 @@ export interface LoadSuggestion {
 
 /**
  * Double progression: if every working set last time reached the top of the
- * rep range, add load; if sets fell short of the bottom, hold or back off;
+ * rep range, add load; if sets fell short of the bottom, back off;
  * otherwise keep the weight and chase reps. Then apply any return-from-break cut.
  */
 export function suggestLoad(
@@ -267,4 +290,67 @@ export function sessionVolume(s: Session): number {
 
 export function workingSetCount(s: Session): number {
   return s.exercises.reduce((a, e) => a + e.sets.filter(isWorkingSet).length, 0);
+}
+
+// ---- Chart series ----
+
+export interface Point {
+  key: string;
+  label: string;
+  value: number;
+}
+
+/** One value per week for the last `n` weeks (oldest first), current week last. */
+export function weeklySeries(sessions: Session[], n: number, fn: (inWeek: Session[]) => number, now = new Date()): Point[] {
+  const mon = weekStart(now);
+  const out: Point[] = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const from = addDays(mon, -7 * i);
+    out.push({
+      key: isoDate(from),
+      label: i === 0 ? 'This wk' : from.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      value: fn(sessionsBetween(sessions, from, addDays(from, 7))),
+    });
+  }
+  return out;
+}
+
+export type ExerciseMeasure = 'e1rm' | 'top' | 'volume' | 'distance' | 'minutes';
+
+export const MEASURES: Record<Metric, { id: ExerciseMeasure; label: string }[]> = {
+  weight_reps: [
+    { id: 'e1rm', label: 'Est. 1-rep max' },
+    { id: 'top', label: 'Top set weight' },
+    { id: 'volume', label: 'Volume (weight × reps)' },
+  ],
+  time_distance: [
+    { id: 'distance', label: 'Distance' },
+    { id: 'minutes', label: 'Minutes' },
+  ],
+};
+
+/** One value per session that included the exercise (last `n` sessions). */
+export function exerciseSeries(sessions: Session[], exerciseId: string, measure: ExerciseMeasure, n = 12): Point[] {
+  const out: Point[] = [];
+  for (const s of finished(sessions)) {
+    const sets = s.exercises.filter((e) => e.exerciseId === exerciseId).flatMap((e) => e.sets.filter(isWorkingSet).map(toLogged));
+    if (!sets.length) continue;
+    let v = 0;
+    if (measure === 'e1rm') v = Math.max(...sets.map((x) => e1rm(x.weight, x.reps)));
+    else if (measure === 'top') v = Math.max(...sets.map((x) => x.weight));
+    else if (measure === 'volume') v = sets.reduce((a, x) => a + x.weight * x.reps, 0);
+    else if (measure === 'distance') v = sets.reduce((a, x) => a + x.distance, 0);
+    else v = sets.reduce((a, x) => a + x.durationSec, 0) / 60;
+    const d = new Date(s.startedAt);
+    out.push({ key: s.id, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), value: Math.round(v * 10) / 10 });
+  }
+  return out.slice(-n);
+}
+
+/** Exercises that appear in the log, most recently used first. */
+export function loggedExercises(sessions: Session[], custom: Exercise[] = []): { id: string; metric: Metric }[] {
+  const seen = new Map<string, Metric>();
+  for (const s of [...finished(sessions)].reverse())
+    for (const e of s.exercises) if (!seen.has(e.exerciseId) && e.sets.some(isWorkingSet)) seen.set(e.exerciseId, metricOf(e, custom));
+  return [...seen].map(([id, metric]) => ({ id, metric }));
 }

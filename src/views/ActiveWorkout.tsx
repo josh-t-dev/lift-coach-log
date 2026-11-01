@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExercisePicker } from '../components/ExercisePicker';
-import { findExercise } from '../data/exercises';
-import { exerciseHistory, isWorkingSet } from '../lib/analytics';
+import { findExercise, metricOf } from '../data/exercises';
+import { exerciseHistory, isWorkingSet, type LoggedSet } from '../lib/analytics';
 import { newSet, uid, update, useAppState } from '../store';
 import type { AppState, ExerciseLog, SetLog } from '../types';
 
@@ -97,6 +97,7 @@ export function ActiveWorkout({ onDone }: { onDone: () => void }) {
           index={i}
           count={active.exercises.length}
           unit={state.unit}
+          distanceUnit={state.distanceUnit}
           prev={hist.get(log.exerciseId)?.lastSets}
           onSetDone={(isCompound) => setRestUntil(Date.now() + (isCompound ? 150 : 90) * 1000)}
         />
@@ -115,10 +116,16 @@ export function ActiveWorkout({ onDone }: { onDone: () => void }) {
       {picking && (
         <ExercisePicker
           onClose={() => setPicking(false)}
-          onPick={(ex) => {
+          onPick={(ex, metric) => {
             const last = hist.get(ex.id)?.lastSets.at(-1);
+            const count = metric === 'time_distance' ? 1 : 3;
             editActive((a) =>
-              a.exercises.push({ id: uid(), exerciseId: ex.id, sets: [newSet(last?.weight ?? null), newSet(last?.weight ?? null), newSet(last?.weight ?? null)] }),
+              a.exercises.push({
+                id: uid(),
+                exerciseId: ex.id,
+                metric: metric === ex.metric ? undefined : metric,
+                sets: Array.from({ length: count }, () => newSet(metric === 'weight_reps' ? last?.weight ?? null : null)),
+              }),
             );
             setPicking(false);
           }}
@@ -141,6 +148,7 @@ function ExerciseBlock({
   index,
   count,
   unit,
+  distanceUnit,
   prev,
   onSetDone,
 }: {
@@ -148,11 +156,14 @@ function ExerciseBlock({
   index: number;
   count: number;
   unit: string;
-  prev?: { weight: number; reps: number }[];
+  distanceUnit: string;
+  prev?: LoggedSet[];
   onSetDone: (compound: boolean) => void;
 }) {
   const state = useAppState();
   const ex = findExercise(log.exerciseId, state.customExercises);
+  const metric = metricOf(log, state.customExercises);
+  const timed = metric === 'time_distance';
   const t = log.target;
 
   const editLog = (fn: (l: ExerciseLog) => void) => editActive((a) => {
@@ -169,20 +180,62 @@ function ExerciseBlock({
     [a.exercises[index], a.exercises[j]] = [a.exercises[j], a.exercises[index]];
   });
 
+  const hasValue = (s: SetLog) => (timed ? (s.durationSec ?? 0) > 0 || (s.distance ?? 0) > 0 : s.reps != null);
+  const prevText = (p?: LoggedSet) => {
+    if (!p) return '—';
+    if (timed) return [p.durationSec ? `${Math.round(p.durationSec / 60)}m` : '', p.distance ? `${p.distance}` : ''].filter(Boolean).join(' ') || '—';
+    return `${p.weight}×${p.reps}`;
+  };
+  const targetText = () => {
+    if (!t) return null;
+    if (timed) {
+      const parts = [t.minutes ? `${t.minutes} min` : '', t.distance ? `${t.distance} ${distanceUnit}` : ''].filter(Boolean);
+      return parts.length ? `Target ${parts.join(' · ')}` : null;
+    }
+    return `Target ${log.sets.length} × ${t.repMin === t.repMax ? t.repMin : `${t.repMin}–${t.repMax}`}${t.rir != null ? ` · ${t.rir} reps in reserve` : ''}`;
+  };
+
+  const toggleDone = (s: SetLog, cell: HTMLElement) => {
+    const willBeDone = !s.done;
+    if (willBeDone && !hasValue(s)) {
+      // Fill from the target when there is one; otherwise send the user to the first box.
+      const canFill = timed ? !!(t?.minutes || t?.distance) : !!t;
+      if (!canFill) {
+        cell.closest('tr')?.querySelector<HTMLInputElement>(timed ? 'input' : 'input[aria-label$="reps"]')?.focus();
+        return;
+      }
+    }
+    editSet(s.id, (x) => {
+      if (willBeDone && !hasValue(x) && t) {
+        if (timed) {
+          x.durationSec = t.minutes ? Math.round(t.minutes * 60) : x.durationSec;
+          x.distance = t.distance ?? x.distance;
+        } else x.reps = t.repMax;
+      }
+      x.done = willBeDone;
+    });
+    if (willBeDone && !timed) onSetDone(!!ex?.compound);
+  };
+
   return (
     <div className="card ex-card">
       <div className="row spread">
         <div className="grow">
           <h3 style={{ margin: 0 }}>{ex?.name ?? log.exerciseId}</h3>
-          {t && (
-            <div className="small muted">
-              Target {log.sets.length} × {t.repMin === t.repMax ? t.repMin : `${t.repMin}–${t.repMax}`}
-              {t.rir != null ? ` · ${t.rir} reps in reserve` : ''}
-            </div>
-          )}
+          <div className="small muted">
+            {targetText() ?? (timed ? 'Time & distance' : 'Weight & reps')}
+          </div>
           {log.note && <div className="small muted">{log.note}</div>}
         </div>
         <div className="row" style={{ gap: 0 }}>
+          <button
+            className="btn ghost small"
+            title="Switch between weight & reps and time & distance"
+            aria-label={timed ? 'Track by weight and reps' : 'Track by time and distance'}
+            onClick={() => editLog((l) => void (l.metric = timed ? 'weight_reps' : 'time_distance'))}
+          >
+            {timed ? '⏱' : '🏋'}⇄
+          </button>
           <button className="btn ghost small" disabled={index === 0} onClick={() => move(-1)} aria-label="Move up">↑</button>
           <button className="btn ghost small" disabled={index === count - 1} onClick={() => move(1)} aria-label="Move down">↓</button>
           <button
@@ -197,11 +250,20 @@ function ExerciseBlock({
       <table className="sets">
         <thead>
           <tr>
-            <th>Set</th>
+            <th>{timed ? '#' : 'Set'}</th>
             <th>Last</th>
-            <th>{unit}</th>
-            <th>Reps</th>
-            <th title="Reps in reserve (optional)">RIR</th>
+            {timed ? (
+              <>
+                <th>Min</th>
+                <th>{distanceUnit}</th>
+              </>
+            ) : (
+              <>
+                <th>{unit}</th>
+                <th>Reps</th>
+                <th title="Reps in reserve (optional)">RIR</th>
+              </>
+            )}
             <th aria-label="Done" />
           </tr>
         </thead>
@@ -209,38 +271,43 @@ function ExerciseBlock({
           {log.sets.map((s, i) => (
             <tr key={s.id} className={s.done ? 'done' : ''}>
               <td className="n">{i + 1}</td>
-              <td className="prev">{prev?.[i] ? `${prev[i].weight}×${prev[i].reps}` : '—'}</td>
-              <td>
-                <input type="number" inputMode="decimal" step="any" aria-label={`Set ${i + 1} weight`} value={s.weight ?? ''}
-                  onChange={(e) => editSet(s.id, (x) => void (x.weight = num(e.target.value)))} />
-              </td>
-              <td>
-                <input type="number" inputMode="numeric" aria-label={`Set ${i + 1} reps`}
-                  placeholder={t ? String(t.repMax) : ''} value={s.reps ?? ''}
-                  onChange={(e) => editSet(s.id, (x) => void (x.reps = num(e.target.value)))} />
-              </td>
-              <td style={{ width: 56 }}>
-                <input type="number" inputMode="numeric" aria-label={`Set ${i + 1} reps in reserve`} value={s.rir ?? ''}
-                  onChange={(e) => editSet(s.id, (x) => void (x.rir = num(e.target.value)))} />
-              </td>
+              <td className="prev">{prevText(prev?.[i])}</td>
+              {timed ? (
+                <>
+                  <td>
+                    <input type="number" inputMode="decimal" step="any" aria-label={`Round ${i + 1} minutes`}
+                      placeholder={t?.minutes ? String(t.minutes) : ''}
+                      value={s.durationSec != null ? Math.round((s.durationSec / 60) * 100) / 100 : ''}
+                      onChange={(e) => editSet(s.id, (x) => { const m = num(e.target.value); x.durationSec = m == null ? null : Math.round(m * 60); })} />
+                  </td>
+                  <td>
+                    <input type="number" inputMode="decimal" step="any" aria-label={`Round ${i + 1} distance`}
+                      placeholder={t?.distance ? String(t.distance) : ''} value={s.distance ?? ''}
+                      onChange={(e) => editSet(s.id, (x) => void (x.distance = num(e.target.value)))} />
+                  </td>
+                </>
+              ) : (
+                <>
+                  <td>
+                    <input type="number" inputMode="decimal" step="any" aria-label={`Set ${i + 1} weight`} value={s.weight ?? ''}
+                      onChange={(e) => editSet(s.id, (x) => void (x.weight = num(e.target.value)))} />
+                  </td>
+                  <td>
+                    <input type="number" inputMode="numeric" aria-label={`Set ${i + 1} reps`}
+                      placeholder={t ? String(t.repMax) : ''} value={s.reps ?? ''}
+                      onChange={(e) => editSet(s.id, (x) => void (x.reps = num(e.target.value)))} />
+                  </td>
+                  <td style={{ width: 56 }}>
+                    <input type="number" inputMode="numeric" aria-label={`Set ${i + 1} reps in reserve`} value={s.rir ?? ''}
+                      onChange={(e) => editSet(s.id, (x) => void (x.rir = num(e.target.value)))} />
+                  </td>
+                </>
+              )}
               <td style={{ width: 44 }}>
                 <button
                   className={`check ${s.done ? 'on' : ''}`}
                   aria-label={s.done ? 'Mark set not done' : 'Mark set done'}
-                  onClick={(ev) => {
-                    const willBeDone = !s.done;
-                    // A set needs a rep count to count; send the user to the reps box instead.
-                    if (willBeDone && s.reps == null && !t) {
-                      ev.currentTarget.closest('tr')?.querySelector<HTMLInputElement>('input[aria-label$="reps"]')?.focus();
-                      return;
-                    }
-                    editSet(s.id, (x) => {
-                      // Ticking an empty reps box uses the target as the rep count.
-                      if (willBeDone && x.reps == null && t) x.reps = t.repMax;
-                      x.done = willBeDone;
-                    });
-                    if (willBeDone) onSetDone(!!ex?.compound);
-                  }}
+                  onClick={(ev) => toggleDone(s, ev.currentTarget)}
                 >
                   ✓
                 </button>
@@ -250,7 +317,9 @@ function ExerciseBlock({
         </tbody>
       </table>
       <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn small" onClick={() => editLog((l) => void l.sets.push(newSet(l.sets.at(-1)?.weight ?? null)))}>+ Set</button>
+        <button className="btn small" onClick={() => editLog((l) => void l.sets.push(newSet(timed ? null : l.sets.at(-1)?.weight ?? null)))}>
+          + {timed ? 'Round' : 'Set'}
+        </button>
         {log.sets.length > 1 && (
           <button className="btn small ghost" onClick={() => editLog((l) => void l.sets.pop())}>− Remove last</button>
         )}

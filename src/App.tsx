@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useAppState } from './store';
 import { ActiveWorkout } from './views/ActiveWorkout';
-import { History } from './views/History';
+import { Plan } from './views/Plan';
+import { Progress } from './views/Progress';
 import { Settings } from './views/Settings';
 import { Today } from './views/Today';
 import { Workouts } from './views/Workouts';
 
-type Tab = 'today' | 'workout' | 'workouts' | 'history' | 'settings';
+type Tab = 'today' | 'workout' | 'plan' | 'workouts' | 'progress' | 'settings';
 
 export function App() {
   const state = useAppState();
@@ -19,8 +20,9 @@ export function App() {
   const tabs: { id: Tab; label: string; ico: string; show: boolean }[] = [
     { id: 'today', label: 'Today', ico: '◎', show: true },
     { id: 'workout', label: 'Logging', ico: '●', show: !!state.active },
+    { id: 'plan', label: 'Plan', ico: '▤', show: true },
     { id: 'workouts', label: 'Workouts', ico: '☰', show: true },
-    { id: 'history', label: 'History', ico: '↺', show: true },
+    { id: 'progress', label: 'Progress', ico: '▮▮', show: true },
     { id: 'settings', label: 'Settings', ico: '⚙', show: true },
   ];
   const current = tab === 'workout' && !state.active ? 'today' : tab;
@@ -29,12 +31,13 @@ export function App() {
     <>
       <main className="app">
         <header className="topbar">
-          <h1>{current === 'workout' ? 'Workout' : 'Lift Log'}</h1>
+          <h1>{current === 'workout' ? 'Workout' : current === 'plan' ? 'Base plan' : 'Lift Log'}</h1>
         </header>
-        {current === 'today' && <Today goWorkout={() => go('workout')} goSettings={() => go('settings')} />}
+        {current === 'today' && <Today goWorkout={() => go('workout')} goSettings={() => go('settings')} goPlan={() => go('plan')} />}
         {current === 'workout' && <ActiveWorkout onDone={() => go('today')} />}
         {current === 'workouts' && <Workouts onStart={() => go('workout')} />}
-        {current === 'history' && <History />}
+        {current === 'plan' && <Plan />}
+        {current === 'progress' && <Progress />}
         {current === 'settings' && <Settings />}
       </main>
       <nav className="nav" aria-label="Main">

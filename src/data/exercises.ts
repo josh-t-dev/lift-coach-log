@@ -1,4 +1,4 @@
-import type { Equipment, Exercise, Muscle } from '../types';
+import type { Equipment, Exercise, ExerciseLog, Metric, Muscle, TemplateExercise } from '../types';
 
 function ex(
   id: string,
@@ -9,7 +9,11 @@ function ex(
   compound: boolean,
   lowerBody = false,
 ): Exercise {
-  return { id, name, primary, secondary, equipment, compound, lowerBody };
+  return { id, name, primary, secondary, equipment, compound, lowerBody, metric: 'weight_reps' };
+}
+
+function cardio(id: string, name: string, equipment: Equipment, primary: Muscle[] = []): Exercise {
+  return { id, name, primary, secondary: [], equipment, compound: false, lowerBody: true, metric: 'time_distance', cardio: true };
 }
 
 export const EXERCISES: Exercise[] = [
@@ -79,9 +83,25 @@ export const EXERCISES: Exercise[] = [
   ex('hanging-leg-raise', 'Hanging Leg Raise', ['core'], [], 'bodyweight', false),
   ex('cable-crunch', 'Cable Crunch', ['core'], [], 'cable', false),
   ex('ab-wheel', 'Ab Wheel Rollout', ['core'], [], 'bodyweight', false),
+
+  // Cardio (time & distance)
+  cardio('run', 'Run', 'bodyweight'),
+  cardio('walk', 'Walk / Hike', 'bodyweight'),
+  cardio('bike', 'Cycling / Stationary Bike', 'machine'),
+  cardio('rower', 'Rowing Machine', 'machine'),
+  cardio('elliptical', 'Elliptical', 'machine'),
+  cardio('stair-climber', 'Stair Climber', 'machine'),
+  cardio('swim', 'Swim', 'bodyweight'),
+  cardio('jump-rope', 'Jump Rope', 'bodyweight'),
+  { ...cardio('farmer-carry', "Farmer's Carry", 'dumbbell', ['core']), cardio: false },
 ];
 
 const BY_ID = new Map(EXERCISES.map((e) => [e.id, e]));
+
+/** How a logged/planned exercise is tracked: the override if set, else the exercise default. */
+export function metricOf(item: ExerciseLog | TemplateExercise, custom: Exercise[] = []): Metric {
+  return item.metric ?? findExercise(item.exerciseId, custom)?.metric ?? 'weight_reps';
+}
 
 export function allExercises(custom: Exercise[]): Exercise[] {
   return [...EXERCISES, ...custom];
