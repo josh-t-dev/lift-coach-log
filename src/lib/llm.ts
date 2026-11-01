@@ -27,6 +27,8 @@ Rules:
 - Start from BASELINE (the base plan day with this week's progressed loads already worked out). Use its weights unless you have a data-backed reason; use null when unknown.
 - Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
+- BASE_PLAN days with fixed weekdays stay on those weekdays. "daily" days are routines done every day. Each exercise's "thisWeek" is the prescription for the current week of the block and overrides its default sets/reps; put it in the exercise note.
+- If STATUS.missedThisWeek lists sessions, don't schedule make-up sessions on top of the week; apply the user's own rules (e.g. a drop order or minimum viable week) and say what to skip or merge.
 - Effort is RPE on a 1–10 scale (10 = no reps left, 8 = about 2 reps left). Prescribe "rpe" per exercise.
 - BASE_PLAN.weeklyActivities are fixed sports/activities. Keep them in the weekPlan on their days, schedule lifting around them, avoid heavy lower-body lifting the day before a hard activity, and count their minutes toward cardio.
 - Exercises with metric "time_distance" (cardio, carries) use "minutes" and "distance" (in the user's distance unit) instead of reps and weight. Count cardio minutes toward the weekly cardio target.
@@ -53,6 +55,8 @@ export function exercisePool(plan: BasePlan, custom: Exercise[]): Exercise[] {
   const avail = new Set(availableExercises(plan.profile, custom).map((e) => e.id));
   return allExercises(custom).filter((e) => planIds.has(e.id) || avail.has(e.id));
 }
+
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function fmtSet(x: SetLog, metric: string): string {
   if (metric === 'time_distance') return `${Math.round((x.durationSec ?? 0) / 6) / 10}min${x.distance ? ` ${x.distance}dist` : ''}`;
@@ -102,7 +106,14 @@ export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string },
       defaultRpe: plan.rpe,
       weeklyActivities: (plan.activities ?? []).map((a) => ({ activity: activityLabel(a, customExercises), days: a.weekdays.map((w) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][w]), intensity: a.intensity })),
       weeklyCardioMinutesTarget: plan.cardioMinutes,
-      days: plan.days.map((d) => ({ name: d.name, exercises: d.exercises.map(planEx) })),
+      currentBlockWeek: `${base.block.week} of ${base.block.total}`,
+      thisWeekNote: plan.weekNotes?.[base.block.week - 1] ?? null,
+      days: plan.days.map((d) => ({
+        name: d.name,
+        weekdays: d.weekdays?.length ? (d.weekdays.length >= 7 ? 'daily' : d.weekdays.map((w) => WD[w])) : 'rotating',
+        note: d.note ?? undefined,
+        exercises: d.exercises.map((e) => ({ ...planEx(e), thisWeek: e.weekly?.[base.block.week - 1] ?? undefined })),
+      })),
     },
     STATUS: {
       status: base.snapshot.status,
@@ -114,6 +125,7 @@ export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string },
       lastWeekSetsPerMuscle: base.snapshot.lastWeek.setsPerMuscle,
       cardioMinutes: { thisWeek: base.snapshot.thisWeek.cardioMinutes, lastWeek: base.snapshot.lastWeek.cardioMinutes },
       returnAdjustment: base.snapshot.adjustment,
+      missedThisWeek: base.missed,
     },
     RECENT_SESSIONS: recent,
     LIFT_HISTORY: lifts,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { findExercise } from '../data/exercises';
-import { hydrate } from '../store';
+import { hydrate, importPlan } from '../store';
 import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
@@ -361,7 +361,7 @@ describe('weekly activities', () => {
   it('counts activity minutes toward planned cardio and mentions them in the plan', () => {
     expect(projectedCardioMinutes([], [], [vb])).toBe(120);
     const out = planWithRules({ ...input, plan: { ...plan, activities: [vb] } });
-    expect(out.recommendation.summary).toMatch(/Today: Volleyball 60 min\. Next lifting session/);
+    expect(out.recommendation.summary).toMatch(/Today: Volleyball 60 min\. Next session: Full Body A \(Sat\)/);
     expect(out.recommendation.rationale.join(' ')).toMatch(/around Volleyball \(Wed\/Fri\)/);
   });
 });
@@ -411,5 +411,59 @@ describe('scheduling around hard games', () => {
     const fri = wk.find((d) => d.day === 'Fri')!;
     expect(fri.focus).toBe('Rest / easy cardio');
     expect(wk.filter((d) => ['A', 'B', 'C'].includes(d.focus))).toHaveLength(3);
+  });
+});
+
+describe('fixed-weekday plans', () => {
+  // Thursday 2026-10-29, block started Mon 2026-10-12 → week 3 of 6
+  const THU = new Date(2026, 9, 29, 7);
+  const fixed: BasePlan = {
+    ...plan,
+    startDate: '2026-10-12',
+    reviewDate: '2026-11-23',
+    weekNotes: ['w1', 'w2', '82–85%', 'w4', 'w5', 'deload'],
+    days: [
+      { id: 'r', name: 'Morning Routine', weekdays: [0, 1, 2, 3, 4, 5, 6], exercises: [{ exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3 }] },
+      { id: 'm', name: 'Sprints', weekdays: [1], exercises: [{ exerciseId: 'accel-sprint', metric: 'time_distance', sets: 6, repMin: 0, repMax: 0, distance: 20, weekly: ['hills 6×20', 'hills 8×25', 'flat 6×20 + 2×30', '', '', 'test'] }] },
+      { id: 'w', name: 'Lower A', weekdays: [3], exercises: [{ exerciseId: 'trap-bar-deadlift', sets: 4, repMin: 3, repMax: 5, weekly: ['4×5 @75%', '', '4×3–5 @ 82–85%', '', '', ''] }] },
+      { id: 't', name: 'Upper', weekdays: [4], exercises: [{ exerciseId: 'bench-press', sets: 4, repMin: 4, repMax: 6, rpe: 7.5 }] },
+    ],
+  };
+  const did = (date: Date, name: string): Session => ({ id: name, name, source: 'template', startedAt: date.toISOString(), finishedAt: date.toISOString(), exercises: [] });
+
+  it("picks today's fixed session, flags missed days and shows the block week", () => {
+    const mon = new Date(2026, 9, 26, 18);
+    const out = planWithRules({ ...input, plan: fixed, sessions: [did(mon, 'Sprints')], now: THU });
+    expect(out.block).toEqual({ week: 3, total: 6 });
+    expect(out.recommendation.today.name).toBe('Upper');
+    expect(out.missed).toEqual(['Lower A']);
+    expect(out.recommendation.rationale[0]).toBe('Week 3 of 6 of "' + plan.name + '": 82–85%.');
+    expect(out.recommendation.rationale.join(' ')).toMatch(/Missed so far this week: Lower A/);
+    expect(out.recommendation.weekPlan.map((d) => d.focus)).toEqual(['Upper', 'Rest / easy cardio', 'Rest / easy cardio', 'Rest / easy cardio', 'Sprints', 'Rest / easy cardio', 'Lower A']);
+  });
+
+  it("applies this week's prescription to each exercise", () => {
+    const out = planWithRules({ ...input, plan: fixed, now: new Date(2026, 9, 28, 7) });
+    expect(out.recommendation.today.name).toBe('Lower A');
+    expect(out.recommendation.today.exercises[0].note).toBe('W3: 4×3–5 @ 82–85%');
+  });
+
+  it("moves to the next fixed session when today's is done or there is none", () => {
+    const out = planWithRules({ ...input, plan: fixed, sessions: [did(THU, 'Upper')], now: THU });
+    expect(out.recommendation.today.name).toBe('Sprints');
+    expect(out.recommendation.summary).toMatch(/Next session: Sprints \(Mon\)/);
+  });
+
+  it("doesn't count sprints or timed work as lifting sets", () => {
+    const proj = projectedWeeklySets(fixed.days);
+    expect(proj.quads).toBe(4 + 0); // trap bar DL only
+    expect(proj.chest).toBe(4);
+  });
+
+  it('imports a plan file and rejects other JSON', () => {
+    const { plan: p } = importPlan({ kind: 'lift-log-plan', version: 1, plan: fixed });
+    expect(p.days.map((d) => d.name)).toEqual(['Morning Routine', 'Sprints', 'Lower A', 'Upper']);
+    expect(p.id).not.toBe(fixed.id);
+    expect(() => importPlan({ sessions: [] })).toThrow(/lift-log-plan/);
   });
 });

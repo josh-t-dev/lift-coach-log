@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
 import { exerciseName, metricOf } from '../data/exercises';
-import { isoDate, snapshot } from '../lib/analytics';
+import { blockWeek, isoDate, snapshot } from '../lib/analytics';
+import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend } from '../lib/llm';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Muscle } from '../types';
@@ -17,6 +18,10 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   const snap = useMemo(() => snapshot(state.sessions, plan, state.customExercises), [state.sessions, plan, state.customExercises]);
   const reviewDue = plan.reviewDate <= isoDate(new Date());
   const todaysActivities = (plan.activities ?? []).filter((a) => a.weekdays.includes(new Date().getDay()));
+  const todaysDays = planDaysOn(plan.days, new Date()).sort((a, b) => Number(isDaily(b)) - Number(isDaily(a)));
+  const doneToday = new Set(state.sessions.filter((x) => x.finishedAt && isoDate(new Date(x.startedAt)) === isoDate(new Date())).map((x) => x.name));
+  const block = blockWeek(plan);
+  const weekNote = plan.weekNotes?.[block.week - 1];
   const rec = state.recommendation;
   const stale = rec && isoDate(new Date(rec.createdAt)) !== isoDate(new Date());
 
@@ -57,6 +62,37 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
             <span className="small muted">Workout in progress</span>
           </div>
           <button className="btn primary" onClick={goWorkout}>Resume</button>
+        </div>
+      )}
+
+      {block.total > 1 && block.total <= 16 && (
+        <div className="small">
+          <b>Week {block.week} of {block.total}</b> · {plan.name}{weekNote ? ` · ${weekNote}` : ''}
+        </div>
+      )}
+
+      {todaysDays.length > 0 && (
+        <div className="card">
+          <h2>Today's plan</h2>
+          <ul className="list">
+            {todaysDays.map((d) => {
+              const built = startablePlanDay(d, plan, state.unit, state.sessions, state.customExercises);
+              const done = doneToday.has(d.name);
+              return (
+                <li key={d.id} className="row spread" style={{ alignItems: 'flex-start' }}>
+                  <div className="grow">
+                    <b>{d.name}</b> {done && <span className="badge">Done</span>}
+                    {d.note && <div className="small">{d.note}</div>}
+                    <div className="small muted">
+                      {built.exercises.filter((e) => e.note?.startsWith(`W${block.week}:`)).map((e) => `${exerciseName(e.exerciseId, state.customExercises)} ${e.note!.split(' — ')[0].replace(/^W\d+: /, '')}`).join(' · ')
+                        || summarize(built.exercises.map((e) => exerciseName(e.exerciseId, state.customExercises)))}
+                    </div>
+                  </div>
+                  <button className={`btn ${done ? '' : 'primary'}`} onClick={() => begin(d.name, built.exercises, 'template')}>{done ? 'Again' : 'Start'}</button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
@@ -141,7 +177,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
               ))}
             </div>
             <div>
-              <h3>{rec.weekPlan[0] && rec.weekPlan[0].focus !== rec.today.name ? 'Next lifting session' : 'Today'}: {rec.today.name}</h3>
+              <h3>{rec.weekPlan[0] && !rec.weekPlan[0].focus.split(' + ').includes(rec.today.name) ? 'Next session' : 'Today'}: {rec.today.name}</h3>
               <ul className="list">
                 {rec.today.exercises.map((e, i) => (
                   <li key={i} className="row spread">
@@ -212,4 +248,8 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
       <button className="btn block ghost" onClick={goPlan}>Edit your base plan & the evidence behind it →</button>
     </div>
   );
+}
+
+function summarize(names: string[], max = 4): string {
+  return names.length <= max ? names.join(' · ') : `${names.slice(0, max).join(' · ')} +${names.length - max} more`;
 }

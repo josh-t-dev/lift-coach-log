@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
 import { allExercises, cardio as makeCardio, exerciseName, metricOf } from '../data/exercises';
-import { isoDate } from '../lib/analytics';
+import { blockWeek, isoDate } from '../lib/analytics';
 import { defaultPrinciples } from '../lib/evidence';
 import { generateBasePlan, generateDays, projectedCardioMinutes, projectedWeeklySets, resetTargets } from '../lib/planner';
-import { uid, update, useAppState } from '../store';
+import { importPlan, uid, update, useAppState } from '../store';
 import { EQUIPMENT, MUSCLES, type Activity, type BasePlan, type Experience, type Goal, type Intensity, type PlanDay } from '../types';
 import { describeTarget, RPE_OPTIONS, rpeHint, WorkoutEditor } from './Workouts';
 
@@ -37,6 +37,8 @@ export function Plan() {
         title={plan.days.some((d) => d.id === editingDay.id) ? 'Edit plan day' : 'New plan day'}
         initial={editingDay}
         saveLabel="Save day"
+        schedule
+        blockWeeks={blockWeek(plan).total}
         onCancel={() => setEditingDay(null)}
         onSave={(day) => {
           editPlan((p) => {
@@ -75,11 +77,21 @@ export function Plan() {
           <span>→ review</span>
           <input type="date" aria-label="Review date" value={plan.reviewDate} onChange={(e) => e.target.value && editPlan((x) => void (x.reviewDate = e.target.value))} style={{ width: 'auto', minHeight: 32, padding: '2px 6px' }} />
         </div>
+        {blockWeek(plan).total > 1 && blockWeek(plan).total <= 16 && (
+          <p style={{ marginTop: 8, fontWeight: 600 }}>
+            Week {blockWeek(plan).week} of {blockWeek(plan).total}
+            {plan.weekNotes?.[blockWeek(plan).week - 1] ? <span className="muted" style={{ fontWeight: 400 }}> · {plan.weekNotes[blockWeek(plan).week - 1]}</span> : null}
+          </p>
+        )}
         <p className="small" style={{ marginTop: 8 }}>
           This is your base plan. Every time you ask the coach for your week, it starts from these days, targets and rules, then
           adjusts for how your training has actually gone.
         </p>
-        <button className="btn block" onClick={() => setNewBlock(true)}>Start a new block (quarter / year)…</button>
+        <WeekNotes plan={plan} />
+        <div className="row wrap">
+          <button className="btn grow" onClick={() => setNewBlock(true)}>Start a new block…</button>
+          <PlanFileButtons />
+        </div>
       </div>
 
       {newBlock && <NewBlockDialog onClose={() => setNewBlock(false)} />}
@@ -90,7 +102,7 @@ export function Plan() {
           <h3 style={{ margin: 0 }}>Weekly schedule</h3>
           <span className="tag">{plan.days.length} days</span>
         </div>
-        {plan.days.length !== p.daysPerWeek && (
+        {!plan.days.some((d) => d.weekdays?.length) && plan.days.length !== p.daysPerWeek && (
           <div className="banner warn">
             Your plan has {plan.days.length} days but you train {p.daysPerWeek}×/week.{' '}
             <button className="btn small ghost" onClick={() => rebuildDays(state)}>Rebuild days from evidence</button>
@@ -99,13 +111,14 @@ export function Plan() {
         {plan.days.map((d, i) => (
           <div key={d.id} style={{ borderTop: i ? '1px solid var(--border)' : 0, paddingTop: i ? 10 : 0 }}>
             <div className="row spread">
-              <b>{i + 1}. {d.name}</b>
+              <b>{i + 1}. {d.name} <span className="tag">{dayWhen(d)}</span></b>
               <div className="row" style={{ gap: 0 }}>
                 <button className="btn ghost small" disabled={i === 0} aria-label="Move day up" onClick={() => editPlan((x) => void ([x.days[i - 1], x.days[i]] = [x.days[i], x.days[i - 1]]))}>↑</button>
                 <button className="btn ghost small" onClick={() => setEditingDay(structuredClone(d))}>Edit</button>
                 <button className="btn ghost small danger" aria-label={`Delete ${d.name}`} onClick={() => confirm(`Remove "${d.name}" from your plan?`) && editPlan((x) => void (x.days = x.days.filter((y) => y.id !== d.id)))}>✕</button>
               </div>
             </div>
+            {d.note && <div className="small">{d.note}</div>}
             <div className="small muted">
               {d.exercises.map((e) => `${exerciseName(e.exerciseId, state.customExercises)} ${describeTarget(e, metricOf(e, state.customExercises), state.distanceUnit)}`).join(' · ')}
             </div>
@@ -137,6 +150,7 @@ export function Plan() {
             <select value={p.goal} onChange={(e) => editPlan((x) => void (x.profile.goal = e.target.value as Goal))}>
               <option value="hypertrophy">Build muscle</option>
               <option value="strength">Get stronger</option>
+              <option value="athletic">Athletic: power, speed, endurance</option>
               <option value="general">General fitness</option>
             </select>
           </label>
@@ -473,5 +487,71 @@ function Activities({ plan }: { plan: BasePlan }) {
         <button className="btn" onClick={add} disabled={pick === '__other' && !otherName.trim()}>+ Add activity</button>
       </div>
     </div>
+  );
+}
+
+function dayWhen(d: PlanDay): string {
+  if (!d.weekdays?.length) return 'rotates';
+  if (d.weekdays.length >= 7) return 'daily';
+  return [1, 2, 3, 4, 5, 6, 0].filter((w) => d.weekdays!.includes(w)).map((w) => WEEKDAY_SHORT[w]).join('/');
+}
+
+function WeekNotes({ plan }: { plan: BasePlan }) {
+  const { total } = blockWeek(plan);
+  if (total < 2 || total > 16) return null;
+  return (
+    <details style={{ marginTop: 8 }}>
+      <summary className="small" style={{ cursor: 'pointer' }}>Week-by-week focus ({plan.weekNotes?.filter(Boolean).length ?? 0}/{total})</summary>
+      <div className="stack" style={{ marginTop: 6 }}>
+        {Array.from({ length: total }, (_, w) => (
+          <label key={w} className="row small">
+            <span style={{ width: 28 }}>W{w + 1}</span>
+            <input type="text" value={plan.weekNotes?.[w] ?? ''} placeholder="e.g. 80% RPE 7 · or Deload + retest"
+              onChange={(e) => editPlan((x) => {
+                const notes = Array.from({ length: total }, (_, k) => x.weekNotes?.[k] ?? '');
+                notes[w] = e.target.value;
+                x.weekNotes = notes;
+              })} />
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+/** Export the base plan as a file, or import one (the current plan is archived). */
+function PlanFileButtons() {
+  const state = useAppState();
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button className="btn" onClick={() => {
+        const used = new Set(state.plan.days.flatMap((d) => d.exercises.map((e) => e.exerciseId)).concat(state.plan.activities.map((a) => a.exerciseId)));
+        const data = { kind: 'lift-log-plan', version: 1, plan: state.plan, customExercises: state.customExercises.filter((e) => used.has(e.id)) };
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+        a.download = `${state.plan.name.replace(/[^\w-]+/g, '-').toLowerCase() || 'plan'}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }}>Export plan</button>
+      <button className="btn" onClick={() => input.current?.click()}>Import plan</button>
+      <input ref={input} type="file" accept="application/json" hidden onChange={async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        try {
+          const result = importPlan(JSON.parse(await f.text()));
+          if (!confirm(`Replace your current plan with "${result.plan.name}" (${result.plan.days.length} days)? Your current plan is saved under Past blocks.`)) return;
+          update((d) => {
+            d.planHistory.unshift({ ...d.plan, endDate: isoDate(new Date()) });
+            d.plan = result.plan;
+            for (const ex of result.customExercises) if (!d.customExercises.some((c) => c.id === ex.id)) d.customExercises.push(ex);
+            d.recommendation = null;
+          });
+        } catch (err) {
+          alert(`That file isn't a plan export: ${err instanceof Error ? err.message : err}`);
+        }
+      }} />
+    </>
   );
 }

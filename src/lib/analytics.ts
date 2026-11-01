@@ -55,7 +55,8 @@ export function setsPerMuscle(sessions: Session[], custom: Exercise[] = []): Rec
   for (const s of sessions) {
     for (const log of s.exercises) {
       const ex = findExercise(log.exerciseId, custom);
-      if (!ex || ex.cardio) continue;
+      // Hard sets are lifting sets: sprints, runs and timed holds don't count.
+      if (!ex || ex.cardio || metricOf(log, custom) === 'time_distance') continue;
       const n = log.sets.filter(isWorkingSet).length;
       for (const m of ex.primary) out[m] += n;
       for (const m of ex.secondary) out[m] += n * 0.5;
@@ -276,6 +277,15 @@ export function isoDate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/** Which week of the plan's block `now` falls in, e.g. { week: 3, total: 6 }. */
+export function blockWeek(plan: { startDate: string; reviewDate: string }, now: Date = new Date()): { week: number; total: number } {
+  const start = new Date(plan.startDate + 'T00:00');
+  const end = new Date(plan.reviewDate + 'T00:00');
+  const total = Math.max(1, Math.round((end.getTime() - start.getTime()) / (7 * DAY_MS)));
+  const week = Math.floor((startOfDay(now).getTime() - start.getTime()) / (7 * DAY_MS)) + 1;
+  return { week: Math.min(total, Math.max(1, week)), total };
 }
 
 function startOfDay(d: Date): Date {

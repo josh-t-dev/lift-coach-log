@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ExercisePicker } from '../components/ExercisePicker';
-import { exerciseName, metricOf } from '../data/exercises';
+import { exerciseName, findExercise, metricOf } from '../data/exercises';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Template, TemplateExercise } from '../types';
 import { fmtRest } from './ActiveWorkout';
@@ -80,7 +80,12 @@ interface Editable {
   id: string;
   name: string;
   exercises: TemplateExercise[];
+  weekdays?: number[];
+  note?: string;
 }
+
+const WD_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /** Edit a named list of exercises — used for saved workouts and Base Plan days. */
 export function WorkoutEditor<T extends Editable>({
@@ -89,12 +94,18 @@ export function WorkoutEditor<T extends Editable>({
   onSave,
   onCancel,
   saveLabel = 'Save workout',
+  schedule = false,
+  blockWeeks = 0,
 }: {
   title: string;
   initial: T;
   onSave: (t: T) => void;
   onCancel: () => void;
   saveLabel?: string;
+  /** Show weekday + note fields (Base Plan days). */
+  schedule?: boolean;
+  /** Weeks in the plan's block; enables week-by-week prescriptions. */
+  blockWeeks?: number;
 }) {
   const state = useAppState();
   const [t, setT] = useState<T>(initial);
@@ -121,6 +132,27 @@ export function WorkoutEditor<T extends Editable>({
         <span>Name</span>
         <input type="text" value={t.name} placeholder="e.g. Upper A" onChange={(e) => setT({ ...t, name: e.target.value })} autoFocus={!initial.name} />
       </label>
+      {schedule && (
+        <>
+          <div>
+            <span className="muted small">Fixed days (leave empty to rotate into free days; pick all 7 for a daily routine)</span>
+            <div className="weekday-chips" role="group" aria-label="Fixed days" style={{ marginTop: 4 }}>
+              {WD_ORDER.map((w) => {
+                const on = !!t.weekdays?.includes(w);
+                return (
+                  <button key={w} className={`chip ${on ? 'on' : ''}`} aria-pressed={on}
+                    onClick={() => setT({ ...t, weekdays: on ? t.weekdays!.filter((x) => x !== w) : [...(t.weekdays ?? []), w].sort() })}>
+                    {WD[w]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <label className="field"><span>Day note (order, time limit, rules)</span>
+            <input type="text" value={t.note ?? ''} placeholder="e.g. Sprint first, lift after. 75 min." onChange={(e) => setT({ ...t, note: e.target.value || undefined })} />
+          </label>
+        </>
+      )}
       {t.exercises.map((e, i) => {
         const metric = metricOf(e, state.customExercises);
         return (
@@ -153,6 +185,13 @@ export function WorkoutEditor<T extends Editable>({
                     {[30, 45, 60, 75, 90, 120, 150, 180, 240, 300].map((r) => <option key={r} value={r}>{fmtRest(r)}</option>)}
                   </select></label>
               </div>
+            ) : findExercise(e.exerciseId, state.customExercises)?.timeUnit === 'sec' ? (
+              <div className="grid2" style={{ marginTop: 8 }}>
+                <label className="field"><span>Reps</span>
+                  <input type="number" inputMode="numeric" value={e.sets} onChange={(ev) => setEx(i, { sets: Math.max(1, n(ev.target.value, 1)) })} /></label>
+                <label className="field"><span>Distance (m)</span>
+                  <input type="number" inputMode="decimal" step="any" value={e.distance ?? ''} onChange={(ev) => setEx(i, { distance: opt(ev.target.value) })} /></label>
+              </div>
             ) : (
               <div className="grid2" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginTop: 8 }}>
                 <label className="field"><span>Rounds</span>
@@ -162,6 +201,27 @@ export function WorkoutEditor<T extends Editable>({
                 <label className="field"><span>Distance ({state.distanceUnit})</span>
                   <input type="number" inputMode="decimal" step="any" value={e.distance ?? ''} onChange={(ev) => setEx(i, { distance: opt(ev.target.value) })} /></label>
               </div>
+            )}
+            <label className="field" style={{ marginTop: 8 }}><span>Note</span>
+              <input type="text" value={e.note ?? ''} placeholder="Cue, tempo, swap…" onChange={(ev) => setEx(i, { note: ev.target.value || undefined })} />
+            </label>
+            {blockWeeks > 1 && (
+              <details style={{ marginTop: 8 }} open={!!e.weekly?.some(Boolean)}>
+                <summary className="small" style={{ cursor: 'pointer' }}>Week-by-week ({e.weekly?.filter(Boolean).length ?? 0}/{blockWeeks})</summary>
+                <div className="stack" style={{ marginTop: 6 }}>
+                  {Array.from({ length: blockWeeks }, (_, w) => (
+                    <label key={w} className="row small">
+                      <span style={{ width: 28 }}>W{w + 1}</span>
+                      <input type="text" value={e.weekly?.[w] ?? ''} placeholder="e.g. 4×5 @ 80%"
+                        onChange={(ev) => {
+                          const weekly = Array.from({ length: blockWeeks }, (_, k) => e.weekly?.[k] ?? '');
+                          weekly[w] = ev.target.value;
+                          setEx(i, { weekly: weekly.some((x) => x.trim()) ? weekly : undefined });
+                        }} />
+                    </label>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
         );

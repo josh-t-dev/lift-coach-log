@@ -173,6 +173,9 @@ function ExerciseBlock({
   const ex = findExercise(log.exerciseId, state.customExercises);
   const metric = metricOf(log, state.customExercises);
   const timed = metric === 'time_distance';
+  // Sprints log seconds and metres; runs and cardio log minutes and km/mi.
+  const secs = ex?.timeUnit === 'sec';
+  const dUnit = ex?.distUnit === 'm' ? 'm' : distanceUnit;
   const t = log.target;
   const rest = log.restSec ?? defaultRest;
 
@@ -193,13 +196,17 @@ function ExerciseBlock({
   const hasValue = (s: SetLog) => (timed ? (s.durationSec ?? 0) > 0 || (s.distance ?? 0) > 0 : s.reps != null);
   const prevText = (p?: LoggedSet) => {
     if (!p) return '—';
-    if (timed) return [p.durationSec ? `${Math.round(p.durationSec / 60)}m` : '', p.distance ? `${p.distance}` : ''].filter(Boolean).join(' ') || '—';
+    if (timed) return [p.durationSec ? (secs ? `${p.durationSec}s` : `${Math.round(p.durationSec / 60)}m`) : '', p.distance ? `${p.distance}` : ''].filter(Boolean).join(' ') || '—';
     return `${p.weight}×${p.reps}`;
   };
+  // "W4: 4×20 + 4×30 m — cue" → this week's prescription replaces the generic target.
+  const weekMatch = log.note?.match(/^W(\d+): (.*?)(?: — (.*))?$/);
+  const otherNote = weekMatch ? weekMatch[3] : log.note;
   const targetText = () => {
+    if (weekMatch) return `Week ${weekMatch[1]}: ${weekMatch[2]}`;
     if (!t) return null;
     if (timed) {
-      const parts = [t.minutes ? `${t.minutes} min` : '', t.distance ? `${t.distance} ${distanceUnit}` : ''].filter(Boolean);
+      const parts = [!secs && t.minutes ? `${t.minutes} min` : '', t.distance ? `${log.sets.length} × ${t.distance} ${dUnit}` : ''].filter(Boolean);
       return parts.length ? `Target ${parts.join(' · ')}` : null;
     }
     return `Target ${log.sets.length} × ${t.repMin === t.repMax ? t.repMin : `${t.repMin}–${t.repMax}`}${t.rpe != null ? ` @ RPE ${t.rpe}` : ''}`;
@@ -218,10 +225,12 @@ function ExerciseBlock({
     editSet(s.id, (x) => {
       if (willBeDone && !hasValue(x) && t) {
         if (timed) {
-          x.durationSec = t.minutes ? Math.round(t.minutes * 60) : x.durationSec;
+          if (!secs) x.durationSec = t.minutes ? Math.round(t.minutes * 60) : x.durationSec;
           x.distance = t.distance ?? x.distance;
         } else x.reps = t.repMax;
       }
+      // A timed sprint with no distance typed uses the target distance.
+      if (willBeDone && timed && x.distance == null && t?.distance) x.distance = t.distance;
       x.done = willBeDone;
     });
     if (willBeDone && !timed) onSetDone(rest, ex?.name ?? '');
@@ -236,7 +245,7 @@ function ExerciseBlock({
             <span>{targetText() ?? (timed ? 'Time & distance' : 'Weight & reps')}</span>
             {!timed && <RestSelect value={rest} onChange={(v) => editLog((l) => void (l.restSec = v))} />}
           </div>
-          {log.note && <div className="small muted">{log.note}</div>}
+          {otherNote && <div className="small muted">{otherNote}</div>}
         </div>
         <div className="row" style={{ gap: 0 }}>
           <button
@@ -265,8 +274,8 @@ function ExerciseBlock({
             <th>Last</th>
             {timed ? (
               <>
-                <th>Min</th>
-                <th>{distanceUnit}</th>
+                <th>{secs ? 'Sec' : 'Min'}</th>
+                <th>{dUnit}</th>
               </>
             ) : (
               <>
@@ -286,10 +295,16 @@ function ExerciseBlock({
               {timed ? (
                 <>
                   <td>
-                    <input type="number" inputMode="decimal" step="any" aria-label={`Round ${i + 1} minutes`}
-                      placeholder={t?.minutes ? String(t.minutes) : ''}
-                      value={s.durationSec != null ? Math.round((s.durationSec / 60) * 100) / 100 : ''}
-                      onChange={(e) => editSet(s.id, (x) => { const m = num(e.target.value); x.durationSec = m == null ? null : Math.round(m * 60); })} />
+                    {secs ? (
+                      <input type="number" inputMode="decimal" step="any" aria-label={`Round ${i + 1} seconds`}
+                        value={s.durationSec ?? ''}
+                        onChange={(e) => editSet(s.id, (x) => void (x.durationSec = num(e.target.value)))} />
+                    ) : (
+                      <input type="number" inputMode="decimal" step="any" aria-label={`Round ${i + 1} minutes`}
+                        placeholder={t?.minutes ? String(t.minutes) : ''}
+                        value={s.durationSec != null ? Math.round((s.durationSec / 60) * 100) / 100 : ''}
+                        onChange={(e) => editSet(s.id, (x) => { const m = num(e.target.value); x.durationSec = m == null ? null : Math.round(m * 60); })} />
+                    )}
                   </td>
                   <td>
                     <input type="number" inputMode="decimal" step="any" aria-label={`Round ${i + 1} distance`}

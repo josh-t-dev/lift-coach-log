@@ -9,7 +9,7 @@
 import { allExercises, findExercise, metricOf } from '../data/exercises';
 import type { Activity, BasePlan, Exercise, Muscle, PlanDay, Profile, Recommendation, Session, TemplateExercise, Unit, WeekPlanDay } from '../types';
 import { MUSCLES } from '../types';
-import { addDays, exerciseHistory, isoDate, sessionsBetween, snapshot, suggestLoad, weekStart, type TrainingSnapshot } from './analytics';
+import { addDays, blockWeek, exerciseHistory, isoDate, sessionsBetween, snapshot, suggestLoad, weekStart, type TrainingSnapshot } from './analytics';
 import { CARDIO_MINUTES, defaultPrinciples, REP_RANGES, TARGET_RPE, WEEKLY_SET_TARGET } from './evidence';
 
 interface Slot {
@@ -203,10 +203,15 @@ export interface BuiltDay {
 }
 
 /** A Base Plan day with this week's loads, volume and effort applied. */
-export function progressDay(day: PlanDay, plan: BasePlan, unit: Unit, sessions: Session[], snap: TrainingSnapshot, custom: Exercise[] = []): BuiltDay {
+export function progressDay(day: PlanDay, plan: BasePlan, unit: Unit, sessions: Session[], snap: TrainingSnapshot, custom: Exercise[] = [], now = new Date()): BuiltDay {
   const hist = exerciseHistory(sessions);
+  const { week } = blockWeek(plan, now);
+  const withWeek = (e: TemplateExercise): TemplateExercise => {
+    const w = e.weekly?.[week - 1]?.trim();
+    return w ? { ...e, note: [`W${week}: ${w}`, e.note].filter(Boolean).join(' — ') } : e;
+  };
   const easing = snap.status === 'new' || snap.status === 'returning' || snap.status === 'detrained';
-  const exercises = day.exercises.map((e) => {
+  const exercises = day.exercises.map(withWeek).map((e) => {
     const ex = findExercise(e.exerciseId, custom);
     if (metricOf(e, custom) === 'time_distance') {
       const minutes = e.minutes ? Math.max(5, Math.round((e.minutes * snap.adjustment.volumeFactor) / 5) * 5) : e.minutes;
@@ -214,7 +219,9 @@ export function progressDay(day: PlanDay, plan: BasePlan, unit: Unit, sessions: 
     }
     const sets = Math.max(1, Math.round(e.sets * snap.adjustment.volumeFactor));
     // Ease effort by one RPE point when starting out or coming back.
-    const rpe = Math.max(6, (e.rpe ?? plan.rpe) - (easing ? 1 : 0));
+    // Plan-default effort applies to loaded lifts, not plyos/mobility (max intent / quality reps).
+    const baseRpe = e.rpe ?? (ex && ex.equipment !== 'bodyweight' && ex.primary.length ? plan.rpe : undefined);
+    const rpe = baseRpe == null ? undefined : Math.max(6, baseRpe - (easing ? 1 : 0));
     const load = suggestLoad(hist.get(e.exerciseId), ex, e.repMin, e.repMax, unit, snap.adjustment.loadCut);
     return { ...e, sets, rpe, weight: load.weight ?? e.weight ?? null, loadReason: load.reason };
   });
@@ -229,26 +236,48 @@ export function nextDayIndex(days: { name: string }[], sessions: Session[], now:
   return idx === -1 ? 0 : idx;
 }
 
+function startOfDayLocal(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function activityLabel(a: Activity, custom: Exercise[] = []): string {
   return `${findExercise(a.exerciseId, custom)?.name ?? a.exerciseId} ${a.minutes} min`;
 }
 
+export const isDaily = (d: { weekdays?: number[] }) => (d.weekdays?.length ?? 0) >= 7;
+export const isPinned = (d: { weekdays?: number[] }) => !!d.weekdays?.length && !isDaily(d);
+
+/** Plan days scheduled on a given date (fixed-weekday days and daily routines). */
+export function planDaysOn<T extends { weekdays?: number[] }>(days: T[], date: Date): T[] {
+  return days.filter((d) => d.weekdays?.includes(date.getDay()));
+}
+
 /**
- * Spread the lifting sessions over the next 7 days, starting today, and
- * move them off days that already have a sport/activity where possible.
+ * The next 7 days, starting today. Days pinned to weekdays stay on their
+ * weekdays; other days rotate into free days, avoiding activity days and the
+ * day before a hard game where possible.
  */
-export function weekPlanFrom(days: { name: string }[], startIdx: number, now: Date, activities: Activity[] = [], custom: Exercise[] = []): WeekPlanDay[] {
-  const n = days.length;
+export function weekPlanFrom(
+  days: { name: string; weekdays?: number[] }[],
+  startIdx: number,
+  now: Date,
+  activities: Activity[] = [],
+  custom: Exercise[] = [],
+): WeekPlanDay[] {
+  const rotating = days.filter((d) => !d.weekdays?.length);
+  const n = rotating.length;
   const actOn = (off: number) => activities.filter((a) => a.weekdays.includes(addDays(now, off).getDay()));
+  const pinnedOn = (off: number) => days.filter((d) => isPinned(d) && d.weekdays!.includes(addDays(now, off).getDay()));
   const lifting = new Set<number>();
   for (let i = 0; i < Math.min(n, 7); i++) {
     const ideal = Math.floor((i * 7) / n);
-    const options = [0, 1, -1, 2, -2, 3, -3].map((d) => ideal + d).filter((o) => o >= 0 && o < 7 && !lifting.has(o));
+    const options = [0, 1, -1, 2, -2, 3, -3].map((d) => ideal + d).filter((o) => o >= 0 && o < 7 && !lifting.has(o) && !pinnedOn(o).length);
+    const free = (o: number) => !actOn(o).length;
     // Prefer a free day that isn't right before a hard game; then any free day.
     const beforeHard = (o: number) => actOn(o + 1).some((a) => a.intensity === 'hard');
-    const best = options.find((o) => !actOn(o).length && !beforeHard(o)) ?? options.find((o) => !actOn(o).length) ?? options[0];
+    const best = options.find((o) => free(o) && !beforeHard(o)) ?? options.find(free) ?? options[0];
     if (best !== undefined) lifting.add(best);
   }
   const out: WeekPlanDay[] = [];
@@ -257,14 +286,14 @@ export function weekPlanFrom(days: { name: string }[], startIdx: number, now: Da
     const d = addDays(now, off);
     const label = off === 0 ? `Today (${WEEKDAYS[d.getDay()]})` : WEEKDAYS[d.getDay()];
     const acts = actOn(off).map((a) => activityLabel(a, custom)).join(' + ');
+    const sessionsToday = pinnedOn(off).map((x) => x.name);
     if (n && lifting.has(off)) {
-      out.push({ day: label, focus: days[(startIdx + k) % n].name, activity: acts || undefined });
+      sessionsToday.push(rotating[(startIdx + k) % n].name);
       k++;
-    } else if (acts) {
-      out.push({ day: label, focus: acts, activity: acts });
-    } else {
-      out.push({ day: label, focus: 'Rest / easy cardio' });
     }
+    if (sessionsToday.length) out.push({ day: label, focus: sessionsToday.join(' + '), activity: acts || undefined });
+    else if (acts) out.push({ day: label, focus: acts, activity: acts });
+    else out.push({ day: label, focus: 'Rest / easy cardio' });
   }
   return out;
 }
@@ -275,7 +304,7 @@ export function projectedWeeklySets(days: { exercises: TemplateExercise[] }[], c
   for (const d of days)
     for (const e of d.exercises) {
       const ex = findExercise(e.exerciseId, custom);
-      if (!ex || ex.cardio) continue;
+      if (!ex || ex.cardio || metricOf(e, custom) === 'time_distance') continue;
       for (const m of ex.primary) out[m] += e.sets;
       for (const m of ex.secondary) out[m] += e.sets * 0.5;
     }
@@ -306,6 +335,9 @@ export interface PlannerInput {
 
 export interface PlannerOutput {
   recommendation: Recommendation;
+  /** Fixed-weekday sessions missed earlier this week. */
+  missed: string[];
+  block: { week: number; total: number };
   snapshot: TrainingSnapshot;
   todayDetail: BuiltDay;
   projected: Record<Muscle, number>;
@@ -314,9 +346,35 @@ export interface PlannerOutput {
 export function planWithRules({ plan, unit, sessions, customExercises, now = new Date() }: PlannerInput): PlannerOutput {
   const snap = snapshot(sessions, plan, customExercises, now);
   const days = plan.days.length ? plan.days : generateDays(plan.profile, plan, sessions, customExercises);
-  const idx = nextDayIndex(days, sessions, now);
-  const today = progressDay(days[idx], plan, unit, sessions, snap, customExercises);
-  const projected = projectedWeeklySets(days, customExercises);
+  const rotating = days.filter((d) => !d.weekdays?.length);
+  const idx = nextDayIndex(rotating, sessions, now);
+  const mon = weekStart(now);
+  const doneThisWeek = new Set(sessionsBetween(sessions, mon, addDays(mon, 7)).map((s) => s.name));
+  const doneToday = new Set(sessionsBetween(sessions, startOfDayLocal(now), addDays(startOfDayLocal(now), 1)).map((s) => s.name));
+
+  // Next session: a fixed-weekday day (today first), else the next rotating day.
+  let next: { day: PlanDay; off: number } | undefined;
+  for (let off = 0; off < 7 && !next; off++) {
+    const d = planDaysOn(days.filter(isPinned), addDays(now, off)).find((x) => !(off === 0 && doneToday.has(x.name)));
+    if (d) next = { day: d, off };
+  }
+  if (rotating.length && (!next || next.off > 0)) {
+    const r = rotating[idx];
+    const wk = weekPlanFrom(days, idx, now, plan.activities ?? [], customExercises);
+    const rOff = wk.findIndex((w) => w.focus.split(' + ').includes(r.name));
+    if (rOff !== -1 && (!next || rOff < next.off)) next = { day: r, off: rOff };
+  }
+  next ??= { day: rotating[idx] ?? days[0], off: 0 };
+  const today = progressDay(next.day, plan, unit, sessions, snap, customExercises, now);
+  const projected = projectedWeeklySets(days.filter((d) => !isDaily(d)), customExercises);
+
+  // Fixed-weekday sessions earlier this week that weren't logged.
+  const todayIdx = (now.getDay() + 6) % 7; // Mon = 0
+  const missed = days
+    .filter(isPinned)
+    .filter((d) => d.weekdays!.some((w) => (w + 6) % 7 < todayIdx) && !doneThisWeek.has(d.name))
+    .map((d) => d.name);
+  const block = blockWeek(plan, now);
 
   const rationale: string[] = [];
   switch (snap.status) {
@@ -345,6 +403,11 @@ export function planWithRules({ plan, unit, sessions, customExercises, now = new
   );
   const activities = plan.activities ?? [];
   const weekPlan = weekPlanFrom(days, idx, now, activities, customExercises);
+  if (missed.length) {
+    rationale.unshift(`Missed so far this week: ${missed.join(', ')}. Don't double up — follow your plan's drop order and keep the minimum viable week.`);
+  }
+  const weekNote = plan.weekNotes?.[block.week - 1]?.trim();
+  if (block.total > 1) rationale.unshift(`Week ${block.week} of ${block.total} of "${plan.name}"${weekNote ? `: ${weekNote}` : ''}.`);
   if (activities.length) {
     const names = activities.map((a) => `${findExercise(a.exerciseId, customExercises)?.name ?? a.exerciseId} (${a.weekdays.map((w) => WEEKDAYS[w]).join('/')})`);
     rationale.push(`Lifting is scheduled around ${names.join(', ')} so they don't land on the same day where possible; avoid your heaviest leg work the day before a hard game.`);
@@ -360,16 +423,22 @@ export function planWithRules({ plan, unit, sessions, customExercises, now = new
     planName: plan.name,
     headline: HEADLINES[snap.status],
     summary:
-      weekPlan[0].focus === today.name
+      next.off === 0
         ? `${snap.statusText} Today: ${today.name} from your plan "${plan.name}".`
-        : `${snap.statusText} Today: ${weekPlan[0].focus}. Next lifting session: ${today.name} from "${plan.name}".`,
+        : `${snap.statusText} Today: ${weekPlan[0].focus}. Next session: ${today.name} (${weekPlan[next.off]?.day ?? 'soon'}).`,
     rationale,
     weekPlan,
     today: { name: today.name, exercises: today.exercises.map(({ loadReason: _r, ...e }) => e) },
   };
-  return { recommendation, snapshot: snap, todayDetail: today, projected };
+  return { recommendation, snapshot: snap, todayDetail: today, projected, missed, block };
 }
 
 export function availableExercises(profile: Profile, custom: Exercise[]): Exercise[] {
   return allExercises(custom).filter((e) => profile.equipment.includes(e.equipment) || e.custom);
+}
+
+/** A plan day ready to start now: this week's prescriptions and progressed loads applied. */
+export function startablePlanDay(day: PlanDay, plan: BasePlan, unit: Unit, sessions: Session[], custom: Exercise[] = [], now = new Date()): BuiltDay {
+  const built = progressDay(day, plan, unit, sessions, snapshot(sessions, plan, custom, now), custom, now);
+  return { ...built, exercises: built.exercises.map(({ loadReason: _r, ...e }) => e) };
 }

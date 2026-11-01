@@ -40,6 +40,9 @@ export interface Exercise {
   cardio?: boolean;
   /** A sport or recreational activity (volleyball, yoga…). */
   sport?: boolean;
+  /** Time & distance units for this exercise: sprints use seconds and metres. */
+  timeUnit?: 'sec' | 'min';
+  distUnit?: 'm' | 'default';
   custom?: boolean;
 }
 
@@ -86,6 +89,8 @@ export interface TemplateExercise {
   repMax: number;
   /** Target RPE (1–10). */
   rpe?: number;
+  /** Week-by-week prescription for the block, e.g. ["6×20 m hills", "8×25 m hills", …]. */
+  weekly?: string[];
   restSec?: number;
   /** Suggested working weight in the user's unit. */
   weight?: number | null;
@@ -102,7 +107,7 @@ export interface Template {
   updatedAt: string;
 }
 
-export type Goal = 'hypertrophy' | 'strength' | 'general';
+export type Goal = 'hypertrophy' | 'strength' | 'athletic' | 'general';
 export type Experience = 'beginner' | 'intermediate' | 'advanced';
 
 export interface Profile {
@@ -126,6 +131,10 @@ export interface PlanPrinciple {
 export interface PlanDay {
   id: string;
   name: string;
+  /** Fixed weekdays (0 = Sun … 6 = Sat). Empty/absent = rotates into free days. All 7 = daily routine. */
+  weekdays?: number[];
+  /** Shown with the day, e.g. "Sprint first, lift after. 75 min." */
+  note?: string;
   exercises: TemplateExercise[];
 }
 
@@ -152,6 +161,8 @@ export interface BasePlan {
   days: PlanDay[];
   /** Sports and other activities on fixed weekdays. */
   activities: Activity[];
+  /** Plan-wide notes per week of the block, e.g. ["75–80% RPE 7", "80%", …]. */
+  weekNotes?: string[];
 }
 
 export type Intensity = 'light' | 'moderate' | 'hard';

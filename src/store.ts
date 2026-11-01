@@ -212,3 +212,29 @@ export function templateFromSession(s: Session, custom: Exercise[] = []): Templa
 export function exportJson(): string {
   return JSON.stringify({ ...state, llm: { ...state.llm, apiKey: '' } }, null, 2);
 }
+
+/** Validate a plan file ({ kind: 'lift-log-plan', plan, customExercises }). */
+export function importPlan(raw: unknown): { plan: BasePlan; customExercises: Exercise[] } {
+  const r = raw as { kind?: string; plan?: Partial<BasePlan>; customExercises?: Exercise[] };
+  if (!r || r.kind !== 'lift-log-plan' || !r.plan || typeof r.plan !== 'object') throw new Error('missing "lift-log-plan" header');
+  if (!Array.isArray(r.plan.days) || !r.plan.days.length) throw new Error('plan has no days');
+  const base = generateBasePlan(DEFAULT_PROFILE);
+  const p = r.plan;
+  migrateRirToRpe({ plan: p } as Record<string, unknown>);
+  const plan: BasePlan = {
+    ...base,
+    ...p,
+    id: uid(),
+    profile: { ...DEFAULT_PROFILE, ...(p.profile ?? {}) },
+    setTargets: { ...base.setTargets, ...(p.setTargets ?? {}) },
+    principles: Array.isArray(p.principles) ? p.principles : base.principles,
+    activities: Array.isArray(p.activities) ? p.activities : [],
+    days: p.days!.map((d) => ({ ...d, id: d.id || uid(), exercises: Array.isArray(d.exercises) ? d.exercises : [] })),
+    updatedAt: new Date().toISOString(),
+    endDate: undefined,
+  };
+  const customExercises = (Array.isArray(r.customExercises) ? r.customExercises : [])
+    .filter((e) => e && typeof e.id === 'string' && typeof e.name === 'string')
+    .map((e) => ({ ...e, metric: e.metric ?? 'weight_reps', primary: e.primary ?? [], secondary: e.secondary ?? [], custom: true }));
+  return { plan, customExercises };
+}

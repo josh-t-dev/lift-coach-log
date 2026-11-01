@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { exerciseName, metricOf } from '../data/exercises';
+import { exerciseName, findExercise, metricOf } from '../data/exercises';
+import type { Exercise, SetLog } from '../types';
 import { sessionVolume, workingSetCount } from '../lib/analytics';
 import { templateFromSession, update, useAppState } from '../store';
 
@@ -37,7 +38,7 @@ export function History() {
                       <div style={{ fontWeight: 500 }}>{exerciseName(e.exerciseId, state.customExercises)}</div>
                       <div className="small muted">
                         {metricOf(e, state.customExercises) === 'time_distance'
-                          ? e.sets.map((x) => [x.durationSec ? `${Math.round(x.durationSec / 6) / 10} min` : '', x.distance ? `${x.distance} ${state.distanceUnit}` : ''].filter(Boolean).join(' · ')).join(', ')
+                          ? e.sets.map((x) => fmtTimed(x, findExercise(e.exerciseId, state.customExercises), state.distanceUnit)).join(', ')
                           : e.sets.map((x) => `${x.weight ?? 0}×${x.reps ?? 0}${x.rpe != null ? ` @${x.rpe}` : ''}`).join(', ')}
                       </div>
                     </li>
@@ -67,4 +68,17 @@ export function History() {
       })}
     </div>
   );
+}
+
+/** "24 min · 4.2 km · 5:43/km" or "3.4 s · 20 m" */
+function fmtTimed(x: SetLog, ex: Exercise | undefined, unit: string): string {
+  const sec = x.durationSec ?? 0;
+  const dist = x.distance ?? 0;
+  if (ex?.timeUnit === 'sec') return [sec ? `${sec} s` : '', dist ? `${dist} m` : ''].filter(Boolean).join(' · ');
+  const parts = [sec ? `${Math.round(sec / 6) / 10} min` : '', dist ? `${dist} ${unit}` : ''];
+  if (sec && dist) {
+    const pace = Math.round(sec / dist);
+    parts.push(`${Math.floor(pace / 60)}:${String(pace % 60).padStart(2, '0')}/${unit}`);
+  }
+  return parts.filter(Boolean).join(' · ');
 }

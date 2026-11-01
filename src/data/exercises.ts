@@ -95,6 +95,57 @@ export const EXERCISES: Exercise[] = [
   cardio('jump-rope', 'Jump Rope', 'bodyweight'),
   { ...cardio('farmer-carry', "Farmer's Carry", 'dumbbell', ['core']), cardio: false },
 
+  // Power & athletic strength
+  ex('trap-bar-deadlift', 'Trap Bar Deadlift', ['quads', 'glutes', 'hamstrings'], ['back', 'core'], 'barbell', true, true),
+  ex('trap-bar-jump', 'Trap Bar Jump', ['quads', 'glutes'], ['calves'], 'barbell', true, true),
+  ex('db-snatch', 'Dumbbell Snatch', ['glutes', 'shoulders'], ['hamstrings', 'core'], 'dumbbell', true, true),
+  ex('nordic-curl', 'Nordic Hamstring Curl', ['hamstrings'], [], 'bodyweight', false, true),
+  ex('copenhagen-plank', 'Copenhagen Adduction (reps/side)', ['core'], [], 'bodyweight', false, true),
+  ex('pallof-press', 'Pallof Press (reps/side)', ['core'], [], 'cable', false),
+  ex('med-ball-chest-pass', 'Med Ball Chest Pass', ['chest'], ['triceps', 'shoulders'], 'bodyweight', true),
+  ex('explosive-push-up', 'Explosive Push-Up', ['chest'], ['triceps', 'shoulders'], 'bodyweight', true),
+  ex('single-leg-hip-hinge', 'Single-Leg Hip Hinge', ['hamstrings', 'glutes'], ['core'], 'dumbbell', false, true),
+  ex('resisted-static-lunge', 'Resisted Static Lunge (knee alignment)', ['quads', 'glutes'], [], 'cable', false, true),
+
+  // Plyometrics (reps)
+  ex('pogo-jumps', 'Pogo Jumps', ['calves'], [], 'bodyweight', false, true),
+  ex('broad-jump', 'Broad Jump (stick)', ['quads', 'glutes'], ['hamstrings'], 'bodyweight', true, true),
+  ex('lateral-bound', 'Lateral Bound (stick, reps/side)', ['glutes', 'quads'], [], 'bodyweight', true, true),
+  ex('line-hops', 'Line Hops', ['calves'], [], 'bodyweight', false, true),
+  ex('single-leg-hop', 'Single-Leg Hop (stick, reps/leg)', ['quads', 'calves'], ['glutes'], 'bodyweight', false, true),
+  ex('hurdle-hops', 'Hurdle Hops', ['quads', 'calves'], ['glutes'], 'bodyweight', false, true),
+  ex('drop-jump', 'Drop-to-Jump (30 cm)', ['quads', 'calves'], ['glutes'], 'bodyweight', false, true),
+
+  // Sprints & bounding (seconds, metres)
+  sprint('hill-sprint', 'Hill Sprint'),
+  sprint('accel-sprint', 'Sprint (acceleration / hill)'),
+  sprint('fly-sprint', 'Fly-In Sprint'),
+  sprint('bounding', 'Bounding (alternate-leg)'),
+  sprint('build-up', 'Build-Up / Stride'),
+  sprint('sprint-test', 'Sprint Test (30/60/100 m)'),
+
+  // Run sessions (minutes, distance)
+  cardio('threshold-run', 'Threshold Run (interval)', 'bodyweight'),
+  cardio('interval-1000', '1000 m Repeats', 'bodyweight'),
+  cardio('interval-400', '400 m Repeats', 'bodyweight'),
+  cardio('easy-run', 'Easy Run', 'bodyweight'),
+  cardio('time-trial-5k', '5k Time Trial', 'bodyweight'),
+
+  // Mobility, physio & breathing (reps or time)
+  timed('diaphragmatic-breathing', 'Diaphragmatic Breathing (pelvic floor drop)'),
+  timed('happy-baby', 'Happy Baby'),
+  timed('deep-squat-hold', 'Deep Squat Hold'),
+  timed('wide-child-pose', "Wide-Knee Child's Pose"),
+  ex('hip-cars', 'Hip CARs (reps/side)', [], [], 'bodyweight', false, true),
+  ex('90-90-pails', '90/90 Hip IR with PAILs/RAILs (rounds/side)', [], [], 'bodyweight', false, true),
+  ex('short-foot', 'Short-Foot (5 s holds)', [], [], 'bodyweight', false, true),
+  ex('banded-clamshell', 'Banded Clamshell', ['glutes'], [], 'bodyweight', false, true),
+  ex('banded-march', 'Banded March (steps)', ['glutes'], [], 'bodyweight', false, true),
+  timed('knee-to-wall', 'Knee-to-Wall Rocks'),
+  timed('worlds-greatest', "World's Greatest Stretch"),
+  timed('leg-swings', 'Leg Swings'),
+  timed('eldoa-l5s1', 'ELDOA L5/S1'),
+
   // Sports & activities (time & distance; most count as cardio)
   sport('volleyball', 'Volleyball'),
   sport('basketball', 'Basketball'),
@@ -112,6 +163,15 @@ export const EXERCISES: Exercise[] = [
   sport('pilates', 'Pilates', false),
   sport('dance', 'Dance'),
 ];
+
+function sprint(id: string, name: string): Exercise {
+  return { ...cardio(id, name, 'bodyweight'), cardio: false, timeUnit: 'sec', distUnit: 'm' };
+}
+
+/** Mobility/breathing held for time (minutes), no muscles counted. */
+function timed(id: string, name: string): Exercise {
+  return { ...cardio(id, name, 'bodyweight'), cardio: false };
+}
 
 function sport(id: string, name: string, isCardio = true): Exercise {
   return { ...cardio(id, name, 'bodyweight'), cardio: isCardio, sport: true };

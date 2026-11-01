@@ -85,6 +85,7 @@ export const WEEKLY_SET_TARGET: Record<Experience, { min: number; max: number }>
 export const REP_RANGES: Record<Goal, { compound: [number, number]; isolation: [number, number] }> = {
   hypertrophy: { compound: [6, 10], isolation: [10, 15] },
   strength: { compound: [3, 6], isolation: [8, 12] },
+  athletic: { compound: [3, 5], isolation: [6, 10] },
   general: { compound: [8, 12], isolation: [10, 15] },
 };
 
@@ -102,7 +103,7 @@ export const RETURN_ADJUSTMENT = [
 ] as const;
 
 /** Default weekly cardio minutes for a new plan. */
-export const CARDIO_MINUTES: Record<Goal, number> = { hypertrophy: 60, strength: 60, general: 150 };
+export const CARDIO_MINUTES: Record<Goal, number> = { hypertrophy: 60, strength: 60, athletic: 150, general: 150 };
 
 export function defaultPrinciples(): PlanPrinciple[] {
   return PRINCIPLES.map((p) => ({ ...p, enabled: true }));
