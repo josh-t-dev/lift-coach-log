@@ -7,10 +7,10 @@
  *     fallback when no LLM is available, and the baseline the LLM refines.
  */
 import { allExercises, findExercise, metricOf } from '../data/exercises';
-import type { BasePlan, Exercise, Muscle, PlanDay, Profile, Recommendation, Session, TemplateExercise, Unit, WeekPlanDay } from '../types';
+import type { Activity, BasePlan, Exercise, Muscle, PlanDay, Profile, Recommendation, Session, TemplateExercise, Unit, WeekPlanDay } from '../types';
 import { MUSCLES } from '../types';
 import { addDays, exerciseHistory, isoDate, sessionsBetween, snapshot, suggestLoad, weekStart, type TrainingSnapshot } from './analytics';
-import { CARDIO_MINUTES, defaultPrinciples, REP_RANGES, TARGET_RIR, WEEKLY_SET_TARGET } from './evidence';
+import { CARDIO_MINUTES, defaultPrinciples, REP_RANGES, TARGET_RPE, WEEKLY_SET_TARGET } from './evidence';
 
 interface Slot {
   kind: 'compound' | 'isolation';
@@ -86,7 +86,7 @@ function pickExercise(slot: Slot, profile: Profile, custom: Exercise[], known: S
   return avail.find((e) => known.has(e.id)) ?? avail[0];
 }
 
-function evidenceTargets(profile: Profile): Pick<BasePlan, 'setTargets' | 'repRanges' | 'rir' | 'cardioMinutes'> {
+function evidenceTargets(profile: Profile): Pick<BasePlan, 'setTargets' | 'repRanges' | 'rpe' | 'cardioMinutes'> {
   // Start at the bottom of the evidence range — enough for most people to
   // grow, and achievable in a normal schedule. Raise priorities on the Plan tab.
   const t = WEEKLY_SET_TARGET[profile.experience];
@@ -95,7 +95,7 @@ function evidenceTargets(profile: Profile): Pick<BasePlan, 'setTargets' | 'repRa
   return {
     setTargets,
     repRanges: { compound: [...REP_RANGES[profile.goal].compound], isolation: [...REP_RANGES[profile.goal].isolation] },
-    rir: TARGET_RIR[profile.experience],
+    rpe: TARGET_RPE[profile.experience],
     cardioMinutes: CARDIO_MINUTES[profile.goal],
   };
 }
@@ -106,7 +106,7 @@ const MIN_PER_SET = 3.25;
 /** Build the weekly days from the evidence-based split for a profile. */
 export function generateDays(
   profile: Profile,
-  targets: Pick<BasePlan, 'repRanges' | 'rir' | 'cardioMinutes'> & { setTargets?: Record<Muscle, number> },
+  targets: Pick<BasePlan, 'repRanges' | 'rpe' | 'cardioMinutes'> & { setTargets?: Record<Muscle, number> },
   sessions: Session[] = [],
   custom: Exercise[] = [],
 ): PlanDay[] {
@@ -131,7 +131,7 @@ export function generateDays(
       const sets = slot.kind === 'compound' && exercises.length < 3 && profile.experience !== 'beginner' ? 3 : 2;
       if (total + sets > maxSets) break;
       total += sets;
-      exercises.push({ exerciseId: ex.id, sets, repMin, repMax, rir: targets.rir });
+      exercises.push({ exerciseId: ex.id, sets, repMin, repMax, rpe: targets.rpe });
     }
     return { id: rid(), name: day.name, exercises };
   });
@@ -187,10 +187,11 @@ export function generateBasePlan(profile: Profile, opts: { sessions?: Session[];
     ...targets,
     principles: defaultPrinciples(),
     days: generateDays(profile, targets, opts.sessions, opts.custom),
+    activities: [],
   };
 }
 
-export function resetTargets(plan: BasePlan): Pick<BasePlan, 'setTargets' | 'repRanges' | 'rir' | 'cardioMinutes'> {
+export function resetTargets(plan: BasePlan): Pick<BasePlan, 'setTargets' | 'repRanges' | 'rpe' | 'cardioMinutes'> {
   return evidenceTargets(plan.profile);
 }
 
@@ -212,9 +213,10 @@ export function progressDay(day: PlanDay, plan: BasePlan, unit: Unit, sessions: 
       return { ...e, sets: Math.max(1, e.sets), minutes };
     }
     const sets = Math.max(1, Math.round(e.sets * snap.adjustment.volumeFactor));
-    const rir = Math.min(4, (e.rir ?? plan.rir) + (easing ? 1 : 0));
+    // Ease effort by one RPE point when starting out or coming back.
+    const rpe = Math.max(6, (e.rpe ?? plan.rpe) - (easing ? 1 : 0));
     const load = suggestLoad(hist.get(e.exerciseId), ex, e.repMin, e.repMax, unit, snap.adjustment.loadCut);
-    return { ...e, sets, rir, weight: load.weight ?? e.weight ?? null, loadReason: load.reason };
+    return { ...e, sets, rpe, weight: load.weight ?? e.weight ?? null, loadReason: load.reason };
   });
   return { name: day.name, exercises };
 }
@@ -229,18 +231,37 @@ export function nextDayIndex(days: { name: string }[], sessions: Session[], now:
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-/** Spread the sessions over the next 7 days, starting today. */
-export function weekPlanFrom(days: { name: string }[], startIdx: number, now: Date): WeekPlanDay[] {
+export function activityLabel(a: Activity, custom: Exercise[] = []): string {
+  return `${findExercise(a.exerciseId, custom)?.name ?? a.exerciseId} ${a.minutes} min`;
+}
+
+/**
+ * Spread the lifting sessions over the next 7 days, starting today, and
+ * move them off days that already have a sport/activity where possible.
+ */
+export function weekPlanFrom(days: { name: string }[], startIdx: number, now: Date, activities: Activity[] = [], custom: Exercise[] = []): WeekPlanDay[] {
   const n = days.length;
-  const trainingOffsets = new Set(Array.from({ length: n }, (_, i) => Math.floor((i * 7) / n)));
+  const actOn = (off: number) => activities.filter((a) => a.weekdays.includes(addDays(now, off).getDay()));
+  const lifting = new Set<number>();
+  for (let i = 0; i < Math.min(n, 7); i++) {
+    const ideal = Math.floor((i * 7) / n);
+    const options = [0, 1, -1, 2, -2, 3, -3].map((d) => ideal + d).filter((o) => o >= 0 && o < 7 && !lifting.has(o));
+    // Prefer a free day that isn't right before a hard game; then any free day.
+    const beforeHard = (o: number) => actOn(o + 1).some((a) => a.intensity === 'hard');
+    const best = options.find((o) => !actOn(o).length && !beforeHard(o)) ?? options.find((o) => !actOn(o).length) ?? options[0];
+    if (best !== undefined) lifting.add(best);
+  }
   const out: WeekPlanDay[] = [];
   let k = 0;
   for (let off = 0; off < 7; off++) {
     const d = addDays(now, off);
     const label = off === 0 ? `Today (${WEEKDAYS[d.getDay()]})` : WEEKDAYS[d.getDay()];
-    if (n && trainingOffsets.has(off)) {
-      out.push({ day: label, focus: days[(startIdx + k) % n].name });
+    const acts = actOn(off).map((a) => activityLabel(a, custom)).join(' + ');
+    if (n && lifting.has(off)) {
+      out.push({ day: label, focus: days[(startIdx + k) % n].name, activity: acts || undefined });
       k++;
+    } else if (acts) {
+      out.push({ day: label, focus: acts, activity: acts });
     } else {
       out.push({ day: label, focus: 'Rest / easy cardio' });
     }
@@ -261,8 +282,10 @@ export function projectedWeeklySets(days: { exercises: TemplateExercise[] }[], c
   return out;
 }
 
-export function projectedCardioMinutes(days: { exercises: TemplateExercise[] }[], custom: Exercise[] = []): number {
-  return days.reduce((a, d) => a + d.exercises.reduce((b, e) => b + (findExercise(e.exerciseId, custom)?.cardio ? (e.minutes ?? 0) : 0), 0), 0);
+export function projectedCardioMinutes(days: { exercises: TemplateExercise[] }[], custom: Exercise[] = [], activities: Activity[] = []): number {
+  const inSessions = days.reduce((a, d) => a + d.exercises.reduce((b, e) => b + (findExercise(e.exerciseId, custom)?.cardio ? (e.minutes ?? 0) : 0), 0), 0);
+  const fromActivities = activities.reduce((a, x) => a + (findExercise(x.exerciseId, custom)?.cardio ? x.minutes * x.weekdays.length : 0), 0);
+  return inSessions + fromActivities;
 }
 
 const HEADLINES: Record<TrainingSnapshot['status'], string> = {
@@ -320,6 +343,12 @@ export function planWithRules({ plan, unit, sessions, customExercises, now = new
       ? `Your plan's days give fewer weekly sets than your targets for: ${under.join(', ')}. That's usually session time — add a day or a few minutes, or lower those targets on the Plan tab.`
       : `Following "${plan.name}" as written meets your weekly set targets for every muscle.`,
   );
+  const activities = plan.activities ?? [];
+  const weekPlan = weekPlanFrom(days, idx, now, activities, customExercises);
+  if (activities.length) {
+    const names = activities.map((a) => `${findExercise(a.exerciseId, customExercises)?.name ?? a.exerciseId} (${a.weekdays.map((w) => WEEKDAYS[w]).join('/')})`);
+    rationale.push(`Lifting is scheduled around ${names.join(', ')} so they don't land on the same day where possible; avoid your heaviest leg work the day before a hard game.`);
+  }
   if (plan.cardioMinutes > 0) {
     const left = Math.max(0, plan.cardioMinutes - snap.thisWeek.cardioMinutes);
     rationale.push(`Cardio: ${snap.thisWeek.cardioMinutes} of ${plan.cardioMinutes} min done this week${left ? ` — ${left} min to go` : ' — target met'}.`);
@@ -330,9 +359,12 @@ export function planWithRules({ plan, unit, sessions, customExercises, now = new
     source: 'rules',
     planName: plan.name,
     headline: HEADLINES[snap.status],
-    summary: `${snap.statusText} Today: ${today.name} from your plan "${plan.name}".`,
+    summary:
+      weekPlan[0].focus === today.name
+        ? `${snap.statusText} Today: ${today.name} from your plan "${plan.name}".`
+        : `${snap.statusText} Today: ${weekPlan[0].focus}. Next lifting session: ${today.name} from "${plan.name}".`,
     rationale,
-    weekPlan: weekPlanFrom(days, idx, now),
+    weekPlan,
     today: { name: today.name, exercises: today.exercises.map(({ loadReason: _r, ...e }) => e) },
   };
   return { recommendation, snapshot: snap, todayDetail: today, projected };

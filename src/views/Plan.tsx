@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { BarList } from '../components/Charts';
-import { exerciseName, metricOf } from '../data/exercises';
+import { allExercises, cardio as makeCardio, exerciseName, metricOf } from '../data/exercises';
 import { isoDate } from '../lib/analytics';
 import { defaultPrinciples } from '../lib/evidence';
 import { generateBasePlan, generateDays, projectedCardioMinutes, projectedWeeklySets, resetTargets } from '../lib/planner';
 import { uid, update, useAppState } from '../store';
-import { EQUIPMENT, MUSCLES, type BasePlan, type Experience, type Goal, type PlanDay } from '../types';
-import { describeTarget, WorkoutEditor } from './Workouts';
+import { EQUIPMENT, MUSCLES, type Activity, type BasePlan, type Experience, type Goal, type Intensity, type PlanDay } from '../types';
+import { describeTarget, RPE_OPTIONS, rpeHint, WorkoutEditor } from './Workouts';
 
 function editPlan(fn: (p: BasePlan) => void) {
   update((d) => {
@@ -52,7 +52,7 @@ export function Plan() {
 
   const due = daysUntil(plan.reviewDate);
   const projected = projectedWeeklySets(plan.days, state.customExercises);
-  const cardio = projectedCardioMinutes(plan.days, state.customExercises);
+  const cardio = projectedCardioMinutes(plan.days, state.customExercises, plan.activities);
   const p = plan.profile;
 
   return (
@@ -127,6 +127,8 @@ export function Plan() {
         </div>
       </div>
 
+      <Activities plan={plan} />
+
       {/* Profile */}
       <div className="card stack">
         <h3>About you</h3>
@@ -195,9 +197,9 @@ export function Plan() {
         <div className="grid2">
           <RangeField label="Compound reps" value={plan.repRanges.compound} onChange={(v) => editPlan((x) => void (x.repRanges.compound = v))} />
           <RangeField label="Isolation reps" value={plan.repRanges.isolation} onChange={(v) => editPlan((x) => void (x.repRanges.isolation = v))} />
-          <label className="field"><span>Effort (reps in reserve)</span>
-            <select value={plan.rir} onChange={(e) => editPlan((x) => void (x.rir = Number(e.target.value)))}>
-              {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} {n === 0 ? '(to failure)' : ''}</option>)}
+          <label className="field"><span>Default effort (RPE)</span>
+            <select value={plan.rpe} onChange={(e) => editPlan((x) => void (x.rpe = Number(e.target.value)))}>
+              {RPE_OPTIONS.map((n) => <option key={n} value={n}>RPE {n} — {rpeHint(n)}</option>)}
             </select>
           </label>
           <label className="field"><span>Cardio minutes / week</span>
@@ -387,6 +389,89 @@ function PastBlocks() {
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function Activities({ plan }: { plan: BasePlan }) {
+  const state = useAppState();
+  const sports = allExercises(state.customExercises).filter((e) => e.sport);
+  const [pick, setPick] = useState(sports[0]?.id ?? '');
+  const [otherName, setOtherName] = useState('');
+  const edit = (id: string, fn: (a: Activity) => void) =>
+    editPlan((x) => {
+      const a = x.activities.find((y) => y.id === id);
+      if (a) fn(a);
+    });
+
+  const add = () => {
+    let exerciseId = pick;
+    if (pick === '__other') {
+      const name = otherName.trim();
+      if (!name) return;
+      exerciseId = `custom-${uid()}`;
+      const ex = { ...makeCardio(exerciseId, name, 'bodyweight'), sport: true, custom: true };
+      update((d) => void d.customExercises.push(ex));
+      setOtherName('');
+    }
+    editPlan((x) => void x.activities.push({ id: uid(), exerciseId, weekdays: [], minutes: 60, intensity: 'moderate' }));
+  };
+
+  return (
+    <div className="card stack">
+      <div>
+        <h3 style={{ margin: 0 }}>Weekly activities</h3>
+        <p className="small muted" style={{ marginTop: 4 }}>
+          Sports and classes on set days. The coach plans lifting around them, keeps heavy leg work away from the day before a hard
+          game, and counts them toward your cardio minutes.
+        </p>
+      </div>
+      {plan.activities.map((a) => (
+        <div key={a.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+          <div className="row spread">
+            <b>{exerciseName(a.exerciseId, state.customExercises)}</b>
+            <button className="btn ghost small danger" aria-label={`Remove ${exerciseName(a.exerciseId, state.customExercises)}`}
+              onClick={() => editPlan((x) => void (x.activities = x.activities.filter((y) => y.id !== a.id)))}>✕</button>
+          </div>
+          <div className="weekday-chips" role="group" aria-label="Days" style={{ margin: '6px 0' }}>
+            {WEEKDAY_ORDER.map((w) => {
+              const on = a.weekdays.includes(w);
+              return (
+                <button key={w} className={`chip ${on ? 'on' : ''}`} aria-pressed={on}
+                  onClick={() => edit(a.id, (x) => void (x.weekdays = on ? x.weekdays.filter((y) => y !== w) : [...x.weekdays, w].sort()))}>
+                  {WEEKDAY_SHORT[w]}
+                </button>
+              );
+            })}
+          </div>
+          <div className="grid2">
+            <label className="field"><span>Minutes</span>
+              <input type="number" inputMode="numeric" min={5} value={a.minutes} onChange={(e) => edit(a.id, (x) => void (x.minutes = Math.max(0, Number(e.target.value) || 0)))} />
+            </label>
+            <label className="field"><span>Intensity</span>
+              <select value={a.intensity} onChange={(e) => edit(a.id, (x) => void (x.intensity = e.target.value as Intensity))}>
+                <option value="light">Light (casual / drills)</option>
+                <option value="moderate">Moderate (rec league)</option>
+                <option value="hard">Hard (competitive game)</option>
+              </select>
+            </label>
+          </div>
+          {!a.weekdays.length && <p className="small" style={{ color: 'var(--warn)', marginTop: 6 }}>Pick the days you play.</p>}
+        </div>
+      ))}
+      <div className="row wrap" style={{ borderTop: plan.activities.length ? '1px solid var(--border)' : 0, paddingTop: plan.activities.length ? 10 : 0 }}>
+        <select aria-label="Activity" value={pick} onChange={(e) => setPick(e.target.value)} style={{ flex: 1, minWidth: 150 }}>
+          {sports.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          <option value="__other">Other…</option>
+        </select>
+        {pick === '__other' && (
+          <input type="text" placeholder="Activity name" aria-label="Activity name" value={otherName} onChange={(e) => setOtherName(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
+        )}
+        <button className="btn" onClick={add} disabled={pick === '__other' && !otherName.trim()}>+ Add activity</button>
+      </div>
     </div>
   );
 }

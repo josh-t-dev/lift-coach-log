@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { findExercise } from './data/exercises';
-import { DEFAULT_LLM } from './lib/llm';
+import { DEFAULT_LLM, PRESETS } from './lib/providers';
 import { generateBasePlan } from './lib/planner';
 import type { AppState, BasePlan, Exercise, ExerciseLog, Profile, Session, SetLog, Template, TemplateExercise } from './types';
 
@@ -24,6 +24,7 @@ export function initialState(): AppState {
     version: 2,
     unit: 'kg',
     distanceUnit: 'km',
+    defaultRestSec: 90,
     plan: generateBasePlan(DEFAULT_PROFILE),
     planHistory: [],
     llm: { ...DEFAULT_LLM },
@@ -44,10 +45,11 @@ export function hydrate(raw: unknown): AppState {
   if (!raw || typeof raw !== 'object') return base;
   const r = raw as Partial<AppState> & { profile?: Partial<Profile> };
   const custom: Exercise[] = (Array.isArray(r.customExercises) ? r.customExercises : []).map((e) => ({ ...e, metric: e.metric ?? 'weight_reps' }));
+  migrateRirToRpe(r);
   const sessions = Array.isArray(r.sessions) ? r.sessions : [];
   let plan: BasePlan;
   if (r.plan && typeof r.plan === 'object') {
-    plan = { ...base.plan, ...r.plan, profile: { ...DEFAULT_PROFILE, ...r.plan.profile } };
+    plan = { ...base.plan, ...r.plan, profile: { ...DEFAULT_PROFILE, ...r.plan.profile }, activities: r.plan.activities ?? [] };
   } else {
     plan = generateBasePlan({ ...DEFAULT_PROFILE, ...(r.profile ?? {}) }, { sessions, custom });
   }
@@ -57,13 +59,51 @@ export function hydrate(raw: unknown): AppState {
     distanceUnit: r.distanceUnit === 'mi' ? 'mi' : r.distanceUnit === 'km' ? 'km' : r.unit === 'lb' ? 'mi' : 'km',
     plan,
     planHistory: Array.isArray(r.planHistory) ? r.planHistory : [],
-    llm: { ...base.llm, ...(r.llm ?? {}) },
+    defaultRestSec: typeof r.defaultRestSec === 'number' && r.defaultRestSec >= 0 ? r.defaultRestSec : 90,
+    llm: migrateLlm({ ...base.llm, ...(r.llm ?? {}) }),
     templates: Array.isArray(r.templates) ? r.templates : [],
     sessions,
     customExercises: custom,
     active: r.active ?? null,
     recommendation: r.recommendation ?? null,
   };
+}
+
+/** Older settings had no provider fields: infer them from the URL. */
+function migrateLlm(l: AppState['llm']): AppState['llm'] {
+  if (l.api && l.preset) return l;
+  const match = PRESETS.find((p) => p.baseUrl === l.baseUrl);
+  return { ...l, api: match?.api ?? 'openai', preset: match?.id ?? 'custom' };
+}
+
+/**
+ * Version 2.0 stored reps in reserve (RIR); effort is now RPE.
+ * RIR-based RPE: RPE = 10 − RIR (Zourdos et al. 2016).
+ */
+type Loose = Record<string, unknown>;
+function migrateRirToRpe(r: Loose) {
+  const conv = (o: Loose | undefined | null) => {
+    if (!o || typeof o !== 'object' || !('rir' in o)) return;
+    if (o.rpe === undefined) o.rpe = typeof o.rir === 'number' ? Math.max(1, 10 - o.rir) : o.rir;
+    delete o.rir;
+  };
+  const sessionsOf = (x: unknown) => (Array.isArray(x) ? (x as Loose[]) : []);
+  const fixSession = (s: Loose | null | undefined) => {
+    for (const e of sessionsOf(s?.exercises)) {
+      for (const set of sessionsOf(e.sets)) conv(set);
+      conv(e.target as Loose);
+    }
+  };
+  sessionsOf(r.sessions).forEach(fixSession);
+  fixSession(r.active as Loose);
+  for (const t of sessionsOf(r.templates)) sessionsOf(t.exercises).forEach(conv);
+  const plans = [r.plan as Loose, ...sessionsOf(r.planHistory)].filter(Boolean);
+  for (const p of plans) {
+    conv(p);
+    for (const d of sessionsOf(p.days)) sessionsOf(d.exercises).forEach(conv);
+  }
+  const rec = r.recommendation as Loose | null;
+  if (rec) sessionsOf((rec.today as Loose)?.exercises).forEach(conv);
 }
 
 function load(): AppState {
@@ -112,7 +152,7 @@ export function useAppState(): AppState {
 // ---- Session helpers ----
 
 export function newSet(weight: number | null = null, reps: number | null = null): SetLog {
-  return { id: uid(), weight, reps, rir: null, done: false };
+  return { id: uid(), weight, reps, rpe: null, done: false };
 }
 
 export function exerciseLogFrom(t: TemplateExercise): ExerciseLog {
@@ -120,8 +160,9 @@ export function exerciseLogFrom(t: TemplateExercise): ExerciseLog {
     id: uid(),
     exerciseId: t.exerciseId,
     metric: t.metric,
+    restSec: t.restSec,
     sets: Array.from({ length: Math.max(1, t.sets) }, () => newSet(t.weight ?? null, null)),
-    target: { repMin: t.repMin, repMax: t.repMax, rir: t.rir, minutes: t.minutes, distance: t.distance },
+    target: { repMin: t.repMin, repMax: t.repMax, rpe: t.rpe, minutes: t.minutes, distance: t.distance },
     note: t.note,
   };
 }
@@ -160,7 +201,8 @@ export function templateFromSession(s: Session, custom: Exercise[] = []): Templa
         sets: Math.max(1, done.length || e.sets.length),
         repMin: e.target?.repMin ?? (reps.length ? Math.min(...reps) : 8),
         repMax: e.target?.repMax ?? (reps.length ? Math.max(...reps) : 12),
-        rir: e.target?.rir,
+        rpe: e.target?.rpe,
+        restSec: e.restSec,
         weight: weights.length ? Math.max(...weights) || null : null,
       };
     }),

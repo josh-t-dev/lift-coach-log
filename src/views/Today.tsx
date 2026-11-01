@@ -16,6 +16,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   const plan = state.plan;
   const snap = useMemo(() => snapshot(state.sessions, plan, state.customExercises), [state.sessions, plan, state.customExercises]);
   const reviewDue = plan.reviewDate <= isoDate(new Date());
+  const todaysActivities = (plan.activities ?? []).filter((a) => a.weekdays.includes(new Date().getDay()));
   const rec = state.recommendation;
   const stale = rec && isoDate(new Date(rec.createdAt)) !== isoDate(new Date());
 
@@ -58,6 +59,18 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
           <button className="btn primary" onClick={goWorkout}>Resume</button>
         </div>
       )}
+
+      {todaysActivities.map((a) => (
+        <div className="card row spread" key={a.id} style={{ borderColor: 'var(--warn)' }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Today: {exerciseName(a.exerciseId, state.customExercises)}</h3>
+            <span className="small muted">{a.minutes} min · {a.intensity} · counts toward cardio</span>
+          </div>
+          <button className="btn" onClick={() => begin(exerciseName(a.exerciseId, state.customExercises), [{ exerciseId: a.exerciseId, metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: a.minutes }], 'template')}>
+            Log it
+          </button>
+        </div>
+      ))}
 
       {reviewDue && (
         <div className="banner warn row spread">
@@ -120,14 +133,15 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
             </div>
             <div className="plan-days">
               {rec.weekPlan.map((d, i) => (
-                <div key={i} className={/rest|walk|off/i.test(d.focus) ? '' : 'train'}>
+                <div key={i} className={`${/rest|walk|off/i.test(d.focus) || d.focus === d.activity ? '' : 'train'} ${d.activity ? 'activity' : ''}`}>
                   <b>{d.day.replace(/^Today \((\w+)\)$/, 'Today')}</b>
                   {d.focus}
+                  {d.activity && d.activity !== d.focus && <i>+ {d.activity}</i>}
                 </div>
               ))}
             </div>
             <div>
-              <h3>Today: {rec.today.name}</h3>
+              <h3>{rec.weekPlan[0] && rec.weekPlan[0].focus !== rec.today.name ? 'Next lifting session' : 'Today'}: {rec.today.name}</h3>
               <ul className="list">
                 {rec.today.exercises.map((e, i) => (
                   <li key={i} className="row spread">
@@ -142,7 +156,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
                     ) : (
                       <div className="small" style={{ textAlign: 'right' }}>
                         {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
-                        <div className="muted">{e.weight != null ? `${e.weight} ${state.unit}` : 'find weight'}{e.rir != null ? ` · RIR ${e.rir}` : ''}</div>
+                        <div className="muted">{e.weight != null ? `${e.weight} ${state.unit}` : 'find weight'}{e.rpe != null ? ` · RPE ${e.rpe}` : ''}</div>
                       </div>
                     )}
                   </li>

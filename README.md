@@ -2,7 +2,8 @@
 
 A simple workout tracker with an AI coach running on an **open-weight LLM**.
 
-- **Log workouts**: start an empty workout and add exercises as you go, or start from a saved workout. When you add an exercise, the app asks how to track it: **weight & reps** or **time & distance**. You can switch any exercise mid-workout with the ⇄ button. Your previous numbers show beside each set, and a rest timer starts each time you tick a set off.
+- **Log workouts**: start an empty workout and add exercises as you go, or start from a saved workout. When you add an exercise, the app asks how to track it: **weight & reps** or **time & distance**. You can switch any exercise mid-workout with the ⇄ button. Your previous numbers show beside each set. Effort is logged as **RPE** (1–10, where 10 means nothing left; RPE = 10 − reps in reserve). A **rest timer** starts when you tick a set off. It defaults to 1:30, and each exercise can have its own time (⏲ while logging, or in a saved workout or plan day).
+- **Weekly activities** (Plan tab): volleyball, basketball, flag football, yoga, or anything you name, on set weekdays. Lifting is scheduled around them and avoids the day before a hard game where possible. They count toward your cardio minutes, and Today has a one-tap **Log it**.
 - **Base plan** (Plan tab): your program for a training block, such as a quarter or a year. It holds your weekly days and exercises, set targets per muscle, rep ranges, effort, cardio minutes, and the research principles plus your own rules. Edit any of it. **Start a new block** saves the old plan under *Past blocks*, where you can restore it.
 - **Coach**: every time you ask, it starts from your base plan and adjusts for your history: weekly sets per muscle, sessions per week, days since your last workout, and recent loads. For example: *"You missed last week — here's this week."*
 - **Progress**: bar charts for workouts per week vs plan, progress per exercise (estimated 1-rep max, top set, volume, or distance and minutes), hard sets per muscle vs target, cardio minutes per week, and weekly volume. Each chart has a table view. Your workout history is listed below the charts.
@@ -37,23 +38,19 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-### Set up an open-weight model (Ollama)
+### Choose where the AI runs (Settings → AI coach)
 
-```bash
-# install from https://ollama.com, then:
-ollama pull qwen3:8b
-ollama serve
-```
+| Provider | Open-weight? | Needs | Notes |
+|---|---|---|---|
+| **Ollama** (default) | Yes | Ollama on your computer: `ollama pull qwen3:8b` | Free and private. For phones, run `OLLAMA_HOST=0.0.0.0 OLLAMA_ORIGINS="*" ollama serve` |
+| **Hugging Face** | Yes | A Hugging Face access token | Hosted, so no computer needs to stay on. Default model `openai/gpt-oss-20b`; **Test connection** lists what your account can use |
+| **LM Studio** | Yes | LM Studio's local server | |
+| **Claude** | No (hosted by Anthropic) | An Anthropic API key from platform.claude.com | Uses the official `@anthropic-ai/sdk`, loaded only when Claude is selected. Default `claude-opus-5-5`; also Sonnet 5.5 and Haiku 5.5. Uses Anthropic's server-side fallback if a request is declined |
+| **Other** | Usually | Any chat-completions server (llama.cpp, vLLM…) | |
 
-The defaults (`http://localhost:11434/v1`, `qwen3:8b`) work as they are. Ollama accepts requests from `localhost` pages. If you open the app from another device (for example your phone at `http://<your-pc-ip>:5173`), allow that origin:
+"OpenAI-compatible" only describes the **request format**: the chat-completions API shape OpenAI introduced, which most open-weight servers now accept as a standard. Using it sends nothing to OpenAI. Claude uses Anthropic's own Messages API.
 
-```bash
-OLLAMA_HOST=0.0.0.0 OLLAMA_ORIGINS="*" ollama serve
-```
-
-Then set the server URL in Settings to `http://<your-pc-ip>:11434/v1`.
-
-Other options: **LM Studio** (`http://localhost:1234/v1`; turn off "Request JSON output" if it rejects it), **llama.cpp server**, **vLLM**, or a hosted open-weight provider (base URL + API key). Suggested models: `qwen3:8b`, `qwen3:14b`, `gpt-oss:20b`, `gemma3:12b`, `llama3.1:8b`.
+API keys are stored only in the browser on that device, and **Export** leaves them out.
 
 ## Scripts
 

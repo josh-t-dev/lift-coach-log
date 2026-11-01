@@ -147,7 +147,7 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .sets th { font-size: 12px; color: var(--muted); font-weight: 500; text-align: center; padding: 2px 4px; }
 .sets td { padding: 3px 3px; text-align: center; }
 .sets td.n { width: 28px; color: var(--muted); font-size: 14px; }
-.sets td.prev { font-size: 13px; color: var(--muted); width: 72px; }
+.sets td.prev { font-size: 12px; color: var(--muted); width: 52px; }
 .sets input { text-align: center; padding: 6px 4px; min-height: 38px; }
 .sets tr.done td { background: var(--done); }
 .sets tr.done td:first-child { border-radius: 8px 0 0 8px; }
@@ -242,3 +242,15 @@ ul.bullets { margin: 6px 0 0; padding-left: 18px; }
 ul.bullets li { margin-bottom: 4px; font-size: 14px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.rest-select { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; color: var(--muted); }
+.rest-select select { width: auto; min-height: 30px; padding: 2px 4px; font-size: 13px; border-color: transparent; background: var(--surface-2); }
+.plan-days > div.activity { background: var(--warn-soft); }
+.plan-days > div.train.activity { background: linear-gradient(var(--accent-soft) 60%, var(--warn-soft) 60%); }
+.plan-days i { display: block; font-style: normal; font-size: 10px; color: var(--warn); margin-top: 2px; }
+.weekday-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.weekday-chips .chip { min-width: 40px; text-align: center; }
+.rest { white-space: nowrap; max-width: calc(100vw - 32px); }
+.rest .rest-time { font-weight: 600; font-variant-numeric: tabular-nums; }
+.rest .rest-name { opacity: .7; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.sets td:nth-child(5) { width: 52px; }

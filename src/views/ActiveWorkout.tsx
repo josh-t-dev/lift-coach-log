@@ -39,6 +39,7 @@ export function ActiveWorkout({ onDone }: { onDone: () => void }) {
   const active = state.active;
   const [picking, setPicking] = useState(false);
   const [restUntil, setRestUntil] = useState<number | null>(null);
+  const [restLabel, setRestLabel] = useState('');
   const now = useNow();
   const hist = useMemo(() => exerciseHistory(state.sessions), [state.sessions]);
 
@@ -99,7 +100,12 @@ export function ActiveWorkout({ onDone }: { onDone: () => void }) {
           unit={state.unit}
           distanceUnit={state.distanceUnit}
           prev={hist.get(log.exerciseId)?.lastSets}
-          onSetDone={(isCompound) => setRestUntil(Date.now() + (isCompound ? 150 : 90) * 1000)}
+          defaultRest={state.defaultRestSec}
+          onSetDone={(sec, name) => {
+            if (sec <= 0) return;
+            setRestUntil(Date.now() + sec * 1000);
+            setRestLabel(name);
+          }}
         />
       ))}
 
@@ -134,7 +140,8 @@ export function ActiveWorkout({ onDone }: { onDone: () => void }) {
 
       {restUntil && (
         <div className="rest" role="status">
-          <span>Rest {mmss((restUntil - now) / 1000)}</span>
+          <span className="rest-time">Rest {mmss((restUntil - now) / 1000)}</span>
+          {restLabel && <span className="rest-name small">{restLabel}</span>}
           <button className="btn" onClick={() => setRestUntil(restUntil + 30_000)}>+30s</button>
           <button className="btn" onClick={() => setRestUntil(null)}>Skip</button>
         </div>
@@ -151,6 +158,7 @@ function ExerciseBlock({
   distanceUnit,
   prev,
   onSetDone,
+  defaultRest,
 }: {
   log: ExerciseLog;
   index: number;
@@ -158,13 +166,15 @@ function ExerciseBlock({
   unit: string;
   distanceUnit: string;
   prev?: LoggedSet[];
-  onSetDone: (compound: boolean) => void;
+  onSetDone: (restSec: number, exerciseName: string) => void;
+  defaultRest: number;
 }) {
   const state = useAppState();
   const ex = findExercise(log.exerciseId, state.customExercises);
   const metric = metricOf(log, state.customExercises);
   const timed = metric === 'time_distance';
   const t = log.target;
+  const rest = log.restSec ?? defaultRest;
 
   const editLog = (fn: (l: ExerciseLog) => void) => editActive((a) => {
     const l = a.exercises.find((x) => x.id === log.id);
@@ -192,7 +202,7 @@ function ExerciseBlock({
       const parts = [t.minutes ? `${t.minutes} min` : '', t.distance ? `${t.distance} ${distanceUnit}` : ''].filter(Boolean);
       return parts.length ? `Target ${parts.join(' · ')}` : null;
     }
-    return `Target ${log.sets.length} × ${t.repMin === t.repMax ? t.repMin : `${t.repMin}–${t.repMax}`}${t.rir != null ? ` · ${t.rir} reps in reserve` : ''}`;
+    return `Target ${log.sets.length} × ${t.repMin === t.repMax ? t.repMin : `${t.repMin}–${t.repMax}`}${t.rpe != null ? ` @ RPE ${t.rpe}` : ''}`;
   };
 
   const toggleDone = (s: SetLog, cell: HTMLElement) => {
@@ -214,7 +224,7 @@ function ExerciseBlock({
       }
       x.done = willBeDone;
     });
-    if (willBeDone && !timed) onSetDone(!!ex?.compound);
+    if (willBeDone && !timed) onSetDone(rest, ex?.name ?? '');
   };
 
   return (
@@ -222,8 +232,9 @@ function ExerciseBlock({
       <div className="row spread">
         <div className="grow">
           <h3 style={{ margin: 0 }}>{ex?.name ?? log.exerciseId}</h3>
-          <div className="small muted">
-            {targetText() ?? (timed ? 'Time & distance' : 'Weight & reps')}
+          <div className="small muted row wrap" style={{ gap: 6 }}>
+            <span>{targetText() ?? (timed ? 'Time & distance' : 'Weight & reps')}</span>
+            {!timed && <RestSelect value={rest} onChange={(v) => editLog((l) => void (l.restSec = v))} />}
           </div>
           {log.note && <div className="small muted">{log.note}</div>}
         </div>
@@ -261,7 +272,7 @@ function ExerciseBlock({
               <>
                 <th>{unit}</th>
                 <th>Reps</th>
-                <th title="Reps in reserve (optional)">RIR</th>
+                <th title="Rate of perceived exertion, 1–10 (optional). 10 = nothing left, 8 = ~2 reps left">RPE</th>
               </>
             )}
             <th aria-label="Done" />
@@ -298,8 +309,9 @@ function ExerciseBlock({
                       onChange={(e) => editSet(s.id, (x) => void (x.reps = num(e.target.value)))} />
                   </td>
                   <td style={{ width: 56 }}>
-                    <input type="number" inputMode="numeric" aria-label={`Set ${i + 1} reps in reserve`} value={s.rir ?? ''}
-                      onChange={(e) => editSet(s.id, (x) => void (x.rir = num(e.target.value)))} />
+                    <input type="number" inputMode="decimal" step={0.5} min={1} max={10} aria-label={`Set ${i + 1} RPE`}
+                      placeholder={t?.rpe != null ? String(t.rpe) : ''} value={s.rpe ?? ''}
+                      onChange={(e) => editSet(s.id, (x) => { const v = num(e.target.value); x.rpe = v == null ? null : Math.min(10, Math.max(1, v)); })} />
                   </td>
                 </>
               )}
@@ -325,5 +337,27 @@ function ExerciseBlock({
         )}
       </div>
     </div>
+  );
+}
+
+const REST_OPTIONS = [0, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300];
+
+export function fmtRest(sec: number): string {
+  if (!sec) return 'Off';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** Compact rest-time picker: "⏲ 1:30". */
+export function RestSelect({ value, onChange, label = true }: { value: number; onChange: (sec: number) => void; label?: boolean }) {
+  const opts = REST_OPTIONS.includes(value) ? REST_OPTIONS : [...REST_OPTIONS, value].sort((a, b) => a - b);
+  return (
+    <label className="rest-select" title="Rest timer between sets">
+      {label && <span aria-hidden>⏲</span>}
+      <select aria-label="Rest between sets" value={value} onChange={(e) => onChange(Number(e.target.value))}>
+        {opts.map((o) => <option key={o} value={o}>{fmtRest(o)}</option>)}
+      </select>
+    </label>
   );
 }

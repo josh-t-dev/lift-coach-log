@@ -3,6 +3,7 @@ import { ExercisePicker } from '../components/ExercisePicker';
 import { exerciseName, metricOf } from '../data/exercises';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Template, TemplateExercise } from '../types';
+import { fmtRest } from './ActiveWorkout';
 
 /** "3×8–12" or "20 min · 5 km" */
 export function describeTarget(e: TemplateExercise, metric: string, distUnit: string): string {
@@ -141,6 +142,16 @@ export function WorkoutEditor<T extends Editable>({
                   <input type="number" inputMode="numeric" value={e.repMax} onChange={(ev) => setEx(i, { repMax: n(ev.target.value, 1) })} /></label>
                 <label className="field"><span>{state.unit}</span>
                   <input type="number" inputMode="decimal" step="any" value={e.weight ?? ''} onChange={(ev) => setEx(i, { weight: opt(ev.target.value) })} /></label>
+                <label className="field" style={{ gridColumn: 'span 2' }}><span>Target effort</span>
+                  <select value={e.rpe ?? ''} onChange={(ev) => setEx(i, { rpe: ev.target.value === '' ? undefined : Number(ev.target.value) })}>
+                    <option value="">Plan default</option>
+                    {RPE_OPTIONS.map((r) => <option key={r} value={r}>RPE {r} — {rpeHint(r)}</option>)}
+                  </select></label>
+                <label className="field" style={{ gridColumn: 'span 2' }}><span>Rest between sets</span>
+                  <select value={e.restSec ?? ''} onChange={(ev) => setEx(i, { restSec: ev.target.value === '' ? undefined : Number(ev.target.value) })}>
+                    <option value="">Default ({fmtRest(state.defaultRestSec)})</option>
+                    {[30, 45, 60, 75, 90, 120, 150, 180, 240, 300].map((r) => <option key={r} value={r}>{fmtRest(r)}</option>)}
+                  </select></label>
               </div>
             ) : (
               <div className="grid2" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginTop: 8 }}>
@@ -187,4 +198,13 @@ export function MetricToggle({ value, onChange }: { value: string; onChange: (m:
       <button className={value === 'time_distance' ? 'on' : ''} aria-pressed={value === 'time_distance'} onClick={() => onChange('time_distance')}>Time & distance</button>
     </div>
   );
+}
+
+export const RPE_OPTIONS = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10];
+
+/** RPE in plain words (RIR-based scale). */
+export function rpeHint(r: number): string {
+  if (r >= 10) return 'nothing left';
+  const left = 10 - r;
+  return Number.isInteger(left) ? `${left} rep${left === 1 ? '' : 's'} left` : `${Math.floor(left)}–${Math.ceil(left)} reps left`;
 }

@@ -1,6 +1,6 @@
 /**
- * Talks to any OpenAI-compatible chat endpoint serving an open-weight model
- * (Ollama, LM Studio, llama.cpp server, vLLM, or a hosted provider).
+ * Builds the coach's prompts and validates its answers. The transport (Ollama,
+ * Hugging Face, Claude, …) lives in providers.ts.
  *
  * The model never sees raw guesswork: it gets the evidence principles as
  * its system prompt, plus a computed snapshot of the user's training and
@@ -10,23 +10,10 @@ import { allExercises, findExercise, metricOf } from '../data/exercises';
 import type { BasePlan, Exercise, LlmSettings, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
 import { exerciseHistory, isWorkingSet } from './analytics';
 import { principlesText } from './evidence';
-import { availableExercises, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
+import { activityLabel, availableExercises, planWithRules, type PlannerInput, type PlannerOutput } from './planner';
+import { chat } from './providers';
 
-export const DEFAULT_LLM: LlmSettings = {
-  enabled: true,
-  baseUrl: 'http://localhost:11434/v1',
-  model: 'qwen3:8b',
-  apiKey: '',
-  jsonMode: true,
-};
-
-export const SUGGESTED_MODELS = [
-  { id: 'qwen3:8b', note: 'Good default; runs on most laptops (~5 GB)' },
-  { id: 'qwen3:14b', note: 'Better reasoning; needs ~10 GB' },
-  { id: 'gpt-oss:20b', note: "OpenAI's open-weight model; ~14 GB" },
-  { id: 'gemma3:12b', note: "Google's open-weight model; ~8 GB" },
-  { id: 'llama3.1:8b', note: 'Fast and widely supported' },
-];
+export { DEFAULT_LLM } from './providers';
 
 export function buildSystemPrompt(plan: BasePlan): string {
   return `You are an evidence-based strength and conditioning coach inside a workout tracking app.
@@ -40,6 +27,8 @@ Rules:
 - Start from BASELINE (the base plan day with this week's progressed loads already worked out). Use its weights unless you have a data-backed reason; use null when unknown.
 - Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
+- Effort is RPE on a 1–10 scale (10 = no reps left, 8 = about 2 reps left). Prescribe "rpe" per exercise.
+- BASE_PLAN.weeklyActivities are fixed sports/activities. Keep them in the weekPlan on their days, schedule lifting around them, avoid heavy lower-body lifting the day before a hard activity, and count their minutes toward cardio.
 - Exercises with metric "time_distance" (cardio, carries) use "minutes" and "distance" (in the user's distance unit) instead of reps and weight. Count cardio minutes toward the weekly cardio target.
 - Never prescribe "making up" missed sessions by cramming extra volume. After time off, reduce load and volume as the principles say.
 - Be direct and encouraging. The headline speaks to the user (e.g. "You missed last week — here's this week").
@@ -50,10 +39,10 @@ Reply with ONLY a JSON object, no markdown, matching:
   "headline": string,                 // <= 70 chars
   "summary": string,                  // 1-3 sentences on this week and why
   "rationale": string[],              // 2-5 bullets, each tied to a principle or the user's data
-  "weekPlan": [{"day": string, "focus": string}],  // the next 7 days starting today
+  "weekPlan": [{"day": string, "focus": string, "activity": string|null}],  // the next 7 days starting today; activity = sport that day
   "today": {
     "name": string,
-    "exercises": [{"exerciseId": string, "sets": number, "repMin": number, "repMax": number, "rir": number, "weight": number|null, "minutes": number|null, "distance": number|null, "note": string}]
+    "exercises": [{"exerciseId": string, "sets": number, "repMin": number, "repMax": number, "rpe": number, "weight": number|null, "minutes": number|null, "distance": number|null, "note": string}]
   }
 }`;
 }
@@ -67,7 +56,7 @@ export function exercisePool(plan: BasePlan, custom: Exercise[]): Exercise[] {
 
 function fmtSet(x: SetLog, metric: string): string {
   if (metric === 'time_distance') return `${Math.round((x.durationSec ?? 0) / 6) / 10}min${x.distance ? ` ${x.distance}dist` : ''}`;
-  return `${x.weight ?? 0}x${x.reps}${x.rir != null ? `@RIR${x.rir}` : ''}`;
+  return `${x.weight ?? 0}x${x.reps}${x.rpe != null ? `@RPE${x.rpe}` : ''}`;
 }
 
 export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string }, base: PlannerOutput, request = ''): string {
@@ -78,7 +67,7 @@ export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string },
     const m = metricOf(e, customExercises);
     return m === 'time_distance'
       ? { id: e.exerciseId, name: name(e.exerciseId), metric: m, minutes: e.minutes ?? null, distance: e.distance ?? null }
-      : { id: e.exerciseId, name: name(e.exerciseId), sets: e.sets, reps: `${e.repMin}-${e.repMax}`, rir: e.rir ?? plan.rir };
+      : { id: e.exerciseId, name: name(e.exerciseId), sets: e.sets, reps: `${e.repMin}-${e.repMax}`, rpe: e.rpe ?? plan.rpe };
   };
 
   const recent = [...sessions]
@@ -110,7 +99,8 @@ export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string },
       profile: plan.profile,
       weeklySetTargetsPerMuscle: plan.setTargets,
       repRanges: plan.repRanges,
-      defaultRir: plan.rir,
+      defaultRpe: plan.rpe,
+      weeklyActivities: (plan.activities ?? []).map((a) => ({ activity: activityLabel(a, customExercises), days: a.weekdays.map((w) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][w]), intensity: a.intensity })),
       weeklyCardioMinutesTarget: plan.cardioMinutes,
       days: plan.days.map((d) => ({ name: d.name, exercises: d.exercises.map(planEx) })),
     },
@@ -163,6 +153,11 @@ const optNum = (v: unknown, lo: number, hi: number): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : null;
 };
+/** RPE in half-point steps. */
+const clampHalf = (n: unknown, lo: number, hi: number, dflt: number) => {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v * 2) / 2)) : dflt;
+};
 const str = (v: unknown, max = 400) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 /** Map an id or name the model produced back to a real exercise. */
@@ -214,7 +209,7 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
       sets: clamp(o.sets, 1, 8, 3),
       repMin,
       repMax,
-      rir: clamp(o.rir, 0, 5, 2),
+      rpe: clampHalf(o.rpe, 5, 10, 8),
       weight: w !== null && Number.isFinite(w) && w >= 0 ? w : null,
       note: str(o.note, 200) || undefined,
     });
@@ -223,7 +218,7 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
 
   const weekPlan: WeekPlanDay[] = (Array.isArray(d.weekPlan) ? d.weekPlan : [])
     .map((p) => (p && typeof p === 'object' ? (p as Record<string, unknown>) : {}))
-    .map((p) => ({ day: str(p.day, 30), focus: str(p.focus, 80) }))
+    .map((p) => ({ day: str(p.day, 30), focus: str(p.focus, 80), activity: str(p.activity, 80) || undefined }))
     .filter((p) => p.day && p.focus)
     .slice(0, 7);
 
@@ -242,33 +237,6 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
   };
 }
 
-export async function chat(settings: LlmSettings, messages: { role: string; content: string }[], signal?: AbortSignal, json = settings.jsonMode): Promise<string> {
-  const url = settings.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
-  const body: Record<string, unknown> = { model: settings.model, messages, temperature: 0.3, stream: false };
-  if (json) body.response_format = { type: 'json_object' };
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`LLM server returned ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
-  }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('LLM returned an empty reply');
-  return content;
-}
-
-export async function listModels(settings: LlmSettings): Promise<string[]> {
-  const url = settings.baseUrl.replace(/\/+$/, '') + '/models';
-  const headers: Record<string, string> = {};
-  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`Server returned ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data?.data) ? data.data.map((m: { id: string }) => m.id) : [];
-}
-
 /**
  * Get a recommendation. Always succeeds: if the LLM is disabled,
  * unreachable, or returns unusable output, the rule-based plan is returned
@@ -277,26 +245,12 @@ export async function listModels(settings: LlmSettings): Promise<string[]> {
 export async function recommend(input: PlannerInput & { distanceUnit?: string }, settings: LlmSettings, request = '', signal?: AbortSignal): Promise<Recommendation> {
   const base = planWithRules(input);
   if (!settings.enabled || !settings.model) return base.recommendation;
-  const messages = [
-    { role: 'system', content: buildSystemPrompt(input.plan) },
-    { role: 'user', content: buildUserPrompt(input, base, request) },
-  ];
   try {
-    let reply: string;
-    try {
-      reply = await chat(settings, messages, signal);
-    } catch (e) {
-      // Some servers reject response_format; retry once without it.
-      if (settings.jsonMode && e instanceof Error && /\b(400|422)\b/.test(e.message)) reply = await chat(settings, messages, signal, false);
-      else throw e;
-    }
+    const reply = await chat(settings, buildSystemPrompt(input.plan), buildUserPrompt(input, base, request), signal);
     return parseRecommendation(extractJson(reply), input, base, settings.model);
   } catch (e) {
     if (signal?.aborted) throw e;
-    const msg = e instanceof Error ? e.message : String(e);
-    const hint = /Failed to fetch|NetworkError|Load failed/i.test(msg)
-      ? `Couldn't reach ${settings.baseUrl}. Is the model server running?`
-      : msg;
+    const hint = e instanceof Error ? e.message : String(e);
     return { ...base.recommendation, warning: `AI coach unavailable (${hint}) — showing the built-in evidence-based plan.` };
   }
 }

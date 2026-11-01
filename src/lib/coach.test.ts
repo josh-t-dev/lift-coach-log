@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { findExercise } from '../data/exercises';
 import { hydrate } from '../store';
+import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
 import { buildSystemPrompt, buildUserPrompt, extractJson, parseRecommendation, recommend } from './llm';
@@ -35,7 +36,7 @@ function session(daysAgo: number, name: string, lifts: [string, number, number, 
     exercises: lifts.map(([exerciseId, sets, weight, reps], i) => ({
       id: `e${n}-${i}`,
       exerciseId,
-      sets: Array.from({ length: sets }, (_, j) => ({ id: `x${j}`, weight, reps, rir: 2, done: true })),
+      sets: Array.from({ length: sets }, (_, j) => ({ id: `x${j}`, weight, reps, rpe: 8, done: true })),
     })),
   };
 }
@@ -185,7 +186,7 @@ describe('LLM output handling', () => {
         today: {
           name: 'Upper',
           exercises: [
-            { exerciseId: 'Barbell Bench Press', sets: 40, repMin: 8, repMax: 6, rir: 2, weight: '80' },
+            { exerciseId: 'Barbell Bench Press', sets: 40, repMin: 8, repMax: 6, rpe: 8.3, weight: '80' },
             { exerciseId: 'made-up-lift', sets: 3, repMin: 8, repMax: 12 },
             { exerciseId: 'lat-pulldown', sets: 3, repMin: 10, repMax: 12, weight: null },
           ],
@@ -197,7 +198,7 @@ describe('LLM output handling', () => {
     );
     expect(rec.source).toBe('llm');
     expect(rec.today.exercises.map((e) => e.exerciseId)).toEqual(['bench-press', 'lat-pulldown']);
-    expect(rec.today.exercises[0]).toMatchObject({ sets: 8, repMin: 8, repMax: 8, weight: 80 });
+    expect(rec.today.exercises[0]).toMatchObject({ sets: 8, repMin: 8, repMax: 8, weight: 80, rpe: 8.5 });
   });
 
   it('throws when no exercises are usable', () => {
@@ -205,11 +206,11 @@ describe('LLM output handling', () => {
   });
 
   it('falls back to rules with a warning when the server is down', async () => {
-    const settings: LlmSettings = { enabled: true, baseUrl: 'http://localhost:1/v1', model: 'x', apiKey: '', jsonMode: true };
+    const settings: LlmSettings = { enabled: true, api: 'openai', preset: 'custom', baseUrl: 'http://localhost:1/v1', model: 'x', apiKey: '', jsonMode: true };
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     const rec = await recommend(input, settings);
     expect(rec.source).toBe('rules');
-    expect(rec.warning).toMatch(/Couldn't reach/);
+    expect(rec.warning).toMatch(/Couldn't reach http:\/\/localhost:1\/v1/);
     vi.unstubAllGlobals();
   });
 
@@ -220,7 +221,7 @@ describe('LLM output handling', () => {
       .mockResolvedValueOnce(new Response('response_format not supported', { status: 400 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] })));
     vi.stubGlobal('fetch', fetchMock);
-    const rec = await recommend(input, { enabled: true, baseUrl: 'http://x/v1/', model: 'm', apiKey: 'k', jsonMode: true });
+    const rec = await recommend(input, { enabled: true, api: 'openai', preset: 'custom', baseUrl: 'http://x/v1/', model: 'm', apiKey: 'k', jsonMode: true });
     expect(rec.source).toBe('llm');
     expect(rec.headline).toBe('H');
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -282,11 +283,11 @@ describe('time & distance', () => {
     id: `run${daysAgo}`, name: 'Run', source: 'blank',
     startedAt: new Date(NOW.getTime() - daysAgo * 86_400_000).toISOString(),
     finishedAt: new Date(NOW.getTime() - daysAgo * 86_400_000 + 3_600_000).toISOString(),
-    exercises: [{ id: 'e', exerciseId: 'run', sets: [{ id: 's', weight: null, reps: null, rir: null, durationSec: min * 60, distance: km, done: true }] }],
+    exercises: [{ id: 'e', exerciseId: 'run', sets: [{ id: 's', weight: null, reps: null, rpe: null, durationSec: min * 60, distance: km, done: true }] }],
   });
 
   it('counts a timed set as done work and sums cardio minutes', () => {
-    expect(isWorkingSet({ id: 'x', weight: null, reps: null, rir: null, durationSec: 600, done: true })).toBe(true);
+    expect(isWorkingSet({ id: 'x', weight: null, reps: null, rpe: null, durationSec: 600, done: true })).toBe(true);
     expect(cardioMinutes([run(0, 30, 5), run(1, 25, 4)])).toBe(55);
     expect(setsPerMuscle([run(0, 30, 5)]).quads).toBe(0);
     expect(snapshot([run(0, 30, 5)], plan, [], NOW).thisWeek.cardioMinutes).toBe(30);
@@ -317,5 +318,98 @@ describe('storage migration', () => {
     expect(st.plan.repRanges.compound).toEqual([3, 6]);
     expect(st.distanceUnit).toBe('mi');
     expect(st.sessions).toHaveLength(1);
+  });
+});
+
+describe('RPE', () => {
+  it('converts stored RIR to RPE (RPE = 10 − RIR) everywhere', () => {
+    const old = {
+      version: 2,
+      plan: { ...plan, rpe: undefined, rir: 2, days: [{ id: 'd', name: 'A', exercises: [{ exerciseId: 'bench-press', sets: 3, repMin: 6, repMax: 10, rir: 1 }] }] },
+      sessions: [{ ...session(1, 'A', [['bench-press', 3, 80, 8]]), exercises: [{ id: 'e', exerciseId: 'bench-press', target: { repMin: 6, repMax: 10, rir: 3 }, sets: [{ id: 's', weight: 80, reps: 8, rir: 2, done: true }, { id: 't', weight: 80, reps: 8, rir: null, done: true }] }] }],
+    };
+    const st = hydrate(structuredClone(old));
+    expect(st.plan.rpe).toBe(8);
+    expect(st.plan.days[0].exercises[0].rpe).toBe(9);
+    const ex = st.sessions[0].exercises[0];
+    expect(ex.target?.rpe).toBe(7);
+    expect(ex.sets.map((x) => x.rpe)).toEqual([8, null]);
+    expect(JSON.stringify(st)).not.toContain('"rir"');
+    expect(st.defaultRestSec).toBe(90);
+  });
+
+  it('eases target RPE by one when returning from a break', () => {
+    const out = planWithRules({ ...input, sessions: [session(40, 'Full Body A', [['back-squat', 3, 100, 8]])] });
+    expect(out.recommendation.today.exercises.find((e) => e.exerciseId === 'back-squat')?.rpe).toBe(7);
+  });
+});
+
+describe('weekly activities', () => {
+  // NOW is Wednesday. Volleyball Wed + Fri.
+  const vb = { id: 'a', exerciseId: 'volleyball', weekdays: [3, 5], minutes: 60, intensity: 'hard' as const };
+  const days = [{ name: 'A' }, { name: 'B' }, { name: 'C' }];
+
+  it('moves lifting off activity days and shows the activity', () => {
+    const wk = weekPlanFrom(days, 0, NOW, [vb]);
+    expect(wk[0]).toMatchObject({ focus: 'Volleyball 60 min', activity: 'Volleyball 60 min' });
+    expect(wk[2].activity).toBe('Volleyball 60 min');
+    const liftingDays = wk.filter((d) => ['A', 'B', 'C'].includes(d.focus));
+    expect(liftingDays).toHaveLength(3);
+    expect(liftingDays.every((d) => !d.activity)).toBe(true);
+  });
+
+  it('counts activity minutes toward planned cardio and mentions them in the plan', () => {
+    expect(projectedCardioMinutes([], [], [vb])).toBe(120);
+    const out = planWithRules({ ...input, plan: { ...plan, activities: [vb] } });
+    expect(out.recommendation.summary).toMatch(/Today: Volleyball 60 min\. Next lifting session/);
+    expect(out.recommendation.rationale.join(' ')).toMatch(/around Volleyball \(Wed\/Fri\)/);
+  });
+});
+
+describe('Claude provider', () => {
+  it('calls the Messages API from the browser with the refusal fallback and parses the plan', async () => {
+    const reply = { headline: 'H', summary: 'S', rationale: ['r'], weekPlan: [], today: { name: 'T', exercises: [{ exerciseId: 'back-squat', sets: 3, repMin: 6, repMax: 10, rpe: 8, weight: null }] } };
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({
+        id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5',
+        content: [{ type: 'text', text: JSON.stringify(reply) }],
+        stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 10 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const rec = await recommend(input, { enabled: true, api: 'anthropic', preset: 'claude', baseUrl: 'https://api.anthropic.com', model: 'claude-opus-5-5', apiKey: 'sk-test', jsonMode: false });
+    vi.unstubAllGlobals();
+    expect(rec.warning).toBeUndefined();
+    expect(rec.source).toBe('llm');
+    expect(rec.model).toBe('claude-opus-5-5');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://api.anthropic.com/v1/messages');
+    const headers = new Headers(init.headers);
+    expect(headers.get('authorization')).toBe('Bearer sk-test');
+    expect(headers.get('anthropic-dangerous-direct-browser-access')).toBe('true');
+    expect(headers.get('anthropic-beta')).toContain('server-side-fallback-2026-07-01');
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ model: 'claude-opus-5-5', fallbacks: 'default', output_config: { effort: 'medium' } });
+    expect(body.system).toContain("BASE_PLAN");
+    expect(body.temperature).toBeUndefined();
+  });
+
+  it('explains a bad key and falls back to rules', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }), { status: 401, headers: { 'content-type': 'application/json' } })));
+    const rec = await recommend(input, { enabled: true, api: 'anthropic', preset: 'claude', baseUrl: 'https://api.anthropic.com', model: 'claude-opus-5-5', apiKey: 'bad', jsonMode: false });
+    vi.unstubAllGlobals();
+    expect(rec.source).toBe('rules');
+    expect(rec.warning).toMatch(/rejected the API key/);
+  });
+});
+
+describe('scheduling around hard games', () => {
+  it('avoids lifting the day before a hard activity when there is room', () => {
+    // NOW is Wednesday. Hard game Saturday only: Friday should stay free of lifting.
+    const game = { id: 'g', exerciseId: 'basketball', weekdays: [6], minutes: 90, intensity: 'hard' as const };
+    const wk = weekPlanFrom([{ name: 'A' }, { name: 'B' }, { name: 'C' }], 0, NOW, [game]);
+    const fri = wk.find((d) => d.day === 'Fri')!;
+    expect(fri.focus).toBe('Rest / easy cardio');
+    expect(wk.filter((d) => ['A', 'B', 'C'].includes(d.focus))).toHaveLength(3);
   });
 });

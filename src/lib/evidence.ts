@@ -29,8 +29,8 @@ export const PRINCIPLES: Principle[] = [
   {
     id: 'effort',
     rule:
-      'Hard sets should end close to failure, about 0–3 reps in reserve (RIR). Going all the way to failure is not required and costs more fatigue, especially on heavy compound lifts.',
-    source: 'Refalo et al. 2023 (Sports Med); Robinson et al. 2024 (Sports Med)',
+      'Hard sets should end close to failure: about RPE 7–10 (0–3 reps left in the tank). Going all the way to failure (RPE 10) is not required and costs more fatigue, especially on heavy compound lifts.',
+    source: 'Refalo et al. 2023 (Sports Med); Robinson et al. 2024 (Sports Med); RPE scale: Zourdos et al. 2016 (J Strength Cond Res), Helms et al. 2016',
   },
   {
     id: 'load',
@@ -52,7 +52,7 @@ export const PRINCIPLES: Principle[] = [
   {
     id: 'detraining',
     rule:
-      'Strength and muscle are largely retained through ~2–3 weeks off; losses grow after that, and are regained faster than they were first built. After a break, return with reduced volume and slightly reduced loads for a week rather than making up missed sessions.',
+      'Strength and muscle are largely retained through ~2–3 weeks off; losses grow after that, and are regained faster than they were first built. After a break, return with reduced volume, slightly reduced loads and a lower RPE for a week rather than making up missed sessions.',
     source: 'Bosquet et al. 2013 (Scand J Med Sci Sports); Ogasawara et al. 2013 (Eur J Appl Physiol)',
   },
   {
@@ -60,6 +60,12 @@ export const PRINCIPLES: Principle[] = [
     rule:
       'Aim for 150–300 minutes of moderate aerobic activity per week (or 75–150 vigorous). Combining cardio with lifting does not meaningfully blunt muscle growth or maximal strength; keep hard leg cardio away from heavy leg sessions if it hurts performance.',
     source: 'WHO Guidelines on Physical Activity, 2020; Schumann et al. 2022 (Sports Med) concurrent-training meta-analysis',
+  },
+  {
+    id: 'sports',
+    rule:
+      'Sports and recreational activities count toward weekly aerobic minutes. Plan lifting around them: avoid heavy or high-volume lower-body sessions the day before a hard game or practice so performance and injury risk are not compromised.',
+    source: 'Concurrent-training guidance; Schumann et al. 2022 (Sports Med); WHO 2020',
   },
   {
     id: 'minimum',
@@ -82,10 +88,11 @@ export const REP_RANGES: Record<Goal, { compound: [number, number]; isolation: [
   general: { compound: [8, 12], isolation: [10, 15] },
 };
 
-export const TARGET_RIR: Record<Experience, number> = {
-  beginner: 3,
-  intermediate: 2,
-  advanced: 1,
+/** Default target RPE (RPE = 10 − reps in reserve). */
+export const TARGET_RPE: Record<Experience, number> = {
+  beginner: 7,
+  intermediate: 8,
+  advanced: 9,
 };
 
 /** How much to cut load and volume when coming back from time off. */

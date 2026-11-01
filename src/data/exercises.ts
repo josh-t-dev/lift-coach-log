@@ -12,7 +12,7 @@ function ex(
   return { id, name, primary, secondary, equipment, compound, lowerBody, metric: 'weight_reps' };
 }
 
-function cardio(id: string, name: string, equipment: Equipment, primary: Muscle[] = []): Exercise {
+export function cardio(id: string, name: string, equipment: Equipment, primary: Muscle[] = []): Exercise {
   return { id, name, primary, secondary: [], equipment, compound: false, lowerBody: true, metric: 'time_distance', cardio: true };
 }
 
@@ -94,7 +94,28 @@ export const EXERCISES: Exercise[] = [
   cardio('swim', 'Swim', 'bodyweight'),
   cardio('jump-rope', 'Jump Rope', 'bodyweight'),
   { ...cardio('farmer-carry', "Farmer's Carry", 'dumbbell', ['core']), cardio: false },
+
+  // Sports & activities (time & distance; most count as cardio)
+  sport('volleyball', 'Volleyball'),
+  sport('basketball', 'Basketball'),
+  sport('flag-football', 'Flag Football'),
+  sport('soccer', 'Soccer'),
+  sport('tennis', 'Tennis'),
+  sport('pickleball', 'Pickleball'),
+  sport('badminton', 'Badminton'),
+  sport('hockey', 'Hockey'),
+  sport('ultimate', 'Ultimate Frisbee'),
+  sport('martial-arts', 'Martial Arts'),
+  sport('climbing', 'Climbing', false),
+  sport('golf', 'Golf (walking)'),
+  sport('yoga', 'Yoga', false),
+  sport('pilates', 'Pilates', false),
+  sport('dance', 'Dance'),
 ];
+
+function sport(id: string, name: string, isCardio = true): Exercise {
+  return { ...cardio(id, name, 'bodyweight'), cardio: isCardio, sport: true };
+}
 
 const BY_ID = new Map(EXERCISES.map((e) => [e.id, e]));
 

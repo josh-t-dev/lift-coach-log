@@ -38,7 +38,7 @@ export function History() {
                       <div className="small muted">
                         {metricOf(e, state.customExercises) === 'time_distance'
                           ? e.sets.map((x) => [x.durationSec ? `${Math.round(x.durationSec / 6) / 10} min` : '', x.distance ? `${x.distance} ${state.distanceUnit}` : ''].filter(Boolean).join(' · ')).join(', ')
-                          : e.sets.map((x) => `${x.weight ?? 0}×${x.reps ?? 0}${x.rir != null ? ` @${x.rir}` : ''}`).join(', ')}
+                          : e.sets.map((x) => `${x.weight ?? 0}×${x.reps ?? 0}${x.rpe != null ? ` @${x.rpe}` : ''}`).join(', ')}
                       </div>
                     </li>
                   ))}

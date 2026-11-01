@@ -1,11 +1,13 @@
 import { useRef, useState } from 'react';
-import { chat, listModels, SUGGESTED_MODELS } from '../lib/llm';
+import { applyPreset, listModels, presetOf, PRESETS, testConnection } from '../lib/providers';
 import { exportJson, hydrate, initialState, replaceState, update, useAppState } from '../store';
 import type { DistanceUnit, Unit } from '../types';
+import { fmtRest } from './ActiveWorkout';
 
 export function Settings() {
   const state = useAppState();
   const llm = state.llm;
+  const preset = presetOf(llm);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [models, setModels] = useState<string[]>([]);
@@ -17,17 +19,11 @@ export function Settings() {
     try {
       const found = await listModels(llm).catch(() => [] as string[]);
       setModels(found);
-      const reply = await chat(llm, [{ role: 'user', content: 'Reply with the JSON {"ok": true}' }], AbortSignal.timeout(60_000));
+      const reply = await testConnection(llm);
       const missing = found.length && !found.includes(llm.model) ? ` Note: "${llm.model}" isn't in the server's model list.` : '';
-      setTest({ ok: true, msg: `Connected. Model replied: ${reply.replace(/<think>[\s\S]*?<\/think>/g, '').trim().slice(0, 80)}${missing}` });
+      setTest({ ok: true, msg: `Connected to ${llm.model}. It replied: ${reply}${missing}` });
     } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      setTest({
-        ok: false,
-        msg: /Failed to fetch|NetworkError|Load failed/i.test(m)
-          ? `Couldn't reach ${llm.baseUrl}. Check the server is running and allows this page's origin (see README: OLLAMA_ORIGINS).`
-          : m,
-      });
+      setTest({ ok: false, msg: e instanceof Error ? e.message : String(e) });
     } finally {
       setTesting(false);
     }
@@ -38,13 +34,18 @@ export function Settings() {
       <h2>Settings</h2>
 
       <div className="card stack">
-        <h3>Units</h3>
-        <p className="small muted">Your goal, schedule, equipment and targets are on the Plan tab.</p>
+        <h3>Units & rest timer</h3>
+        <p className="small muted">Your goal, schedule, activities and targets are on the Plan tab. Each exercise can override the rest time (⏲ while logging).</p>
         <div className="grid2">
           <label className="field"><span>Weight</span>
             <select value={state.unit} onChange={(e) => update((d) => void (d.unit = e.target.value as Unit))}>
               <option value="kg">kg</option>
               <option value="lb">lb</option>
+            </select>
+          </label>
+          <label className="field"><span>Default rest between sets</span>
+            <select value={state.defaultRestSec} onChange={(e) => update((d) => void (d.defaultRestSec = Number(e.target.value)))}>
+              {[30, 45, 60, 75, 90, 120, 150, 180, 240, 300].map((r) => <option key={r} value={r}>{fmtRest(r)}{r === 90 ? ' (default)' : ''}</option>)}
             </select>
           </label>
           <label className="field"><span>Distance</span>
@@ -58,42 +59,56 @@ export function Settings() {
 
       <div className="card stack">
         <div className="row spread">
-          <h3 style={{ margin: 0 }}>AI coach (open-weight model)</h3>
+          <h3 style={{ margin: 0 }}>AI coach</h3>
           <label className="row small"><input type="checkbox" checked={llm.enabled} onChange={(e) => update((d) => void (d.llm.enabled = e.target.checked))} /> Enabled</label>
         </div>
         <p className="small muted">
-          Any OpenAI-compatible server works: Ollama, LM Studio, llama.cpp, vLLM, or a hosted open-weight provider.
-          When it's off or unreachable, the built-in evidence-based planner is used.
+          Choose where the coach's model runs. If it's off or unreachable, the built-in evidence-based planner is used instead.
         </p>
-        <label className="field"><span>Server URL</span>
-          <input type="url" value={llm.baseUrl} onChange={(e) => update((d) => void (d.llm.baseUrl = e.target.value.trim()))} />
+        <label className="field"><span>Provider</span>
+          <select value={preset.id} onChange={(e) => { setTest(null); setModels([]); update((d) => void (d.llm = applyPreset(e.target.value, d.llm))); }}>
+            {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
         </label>
+        <div className="banner info small">
+          {preset.openWeight
+            ? 'Open-weight: the model files are public and can run on your own hardware.'
+            : 'Claude is a hosted model from Anthropic (not open-weight). Requests go to Anthropic and are billed to your API key.'}
+          <ol className="bullets" style={{ marginTop: 6 }}>{preset.setup.map((x, i) => <li key={i}>{x}</li>)}</ol>
+        </div>
+        {preset.id !== 'claude' && (
+          <label className="field"><span>Server URL</span>
+            <input type="url" value={llm.baseUrl} onChange={(e) => update((d) => void (d.llm.baseUrl = e.target.value.trim()))} />
+          </label>
+        )}
         <label className="field"><span>Model</span>
           <input type="text" list="model-list" value={llm.model} onChange={(e) => update((d) => void (d.llm.model = e.target.value.trim()))} />
           <datalist id="model-list">
-            {[...new Set([...models, ...SUGGESTED_MODELS.map((m) => m.id)])].map((m) => <option key={m} value={m} />)}
+            {[...new Set([...preset.models.map((m) => m.id), ...models])].map((m) => <option key={m} value={m} />)}
           </datalist>
         </label>
-        <label className="field"><span>API key (only for hosted providers)</span>
-          <input type="password" value={llm.apiKey} autoComplete="off" onChange={(e) => update((d) => void (d.llm.apiKey = e.target.value))} />
-        </label>
-        <label className="row small"><input type="checkbox" checked={llm.jsonMode} onChange={(e) => update((d) => void (d.llm.jsonMode = e.target.checked))} /> Request JSON output (turn off if your server rejects it)</label>
-        <button className="btn" onClick={runTest} disabled={testing}>{testing ? <><span className="spinner" /> Testing…</> : 'Test connection'}</button>
+        {preset.models.length > 0 && (
+          <div className="chips">
+            {preset.models.map((m) => (
+              <button key={m.id} className={`chip ${llm.model === m.id ? 'on' : ''}`} title={m.note} onClick={() => update((d) => void (d.llm.model = m.id))}>
+                {m.id}
+              </button>
+            ))}
+          </div>
+        )}
+        {(preset.keyLabel || preset.id === 'custom') && (
+          <label className="field"><span>{preset.keyLabel ?? 'API key (if the server needs one)'}{preset.keyWhere ? ` — from ${preset.keyWhere}` : ''}</span>
+            <input type="password" value={llm.apiKey} autoComplete="off" onChange={(e) => update((d) => void (d.llm.apiKey = e.target.value.trim()))} />
+          </label>
+        )}
+        {llm.api === 'openai' && (
+          <label className="row small"><input type="checkbox" checked={llm.jsonMode} onChange={(e) => update((d) => void (d.llm.jsonMode = e.target.checked))} /> Request JSON output (turn off if the server rejects it)</label>
+        )}
+        <button className="btn" onClick={runTest} disabled={testing || (!!preset.keyLabel && !llm.apiKey)}>
+          {testing ? <><span className="spinner" /> Testing…</> : 'Test connection'}
+        </button>
         {test && <div className={`banner ${test.ok ? 'info' : 'warn'}`}>{test.msg}</div>}
-        {models.length > 0 && <p className="small muted">Models on server: {models.join(', ')}</p>}
-        <details>
-          <summary className="small" style={{ cursor: 'pointer' }}>How to set it up (5 minutes)</summary>
-          <ol className="bullets">
-            <li>Install Ollama from <b>ollama.com</b> on your computer (Mac, Windows or Linux).</li>
-            <li>In a terminal run <code>ollama pull qwen3:8b</code> (about a 5 GB download).</li>
-            <li>Keep Ollama running, then tap <b>Test connection</b> above.</li>
-            <li>Using the app on your phone? On the computer, quit Ollama and start it with <code>OLLAMA_HOST=0.0.0.0 OLLAMA_ORIGINS="*" ollama serve</code>, then set Server URL to <code>http://&lt;computer IP&gt;:11434/v1</code>.</li>
-          </ol>
-        </details>
-        <details>
-          <summary className="small" style={{ cursor: 'pointer' }}>Suggested models</summary>
-          <ul className="bullets">{SUGGESTED_MODELS.map((m) => <li key={m.id}><code>{m.id}</code> — {m.note}</li>)}</ul>
-        </details>
+        {models.length > 0 && <p className="small muted">Available: {models.slice(0, 30).join(', ')}{models.length > 30 ? '…' : ''}</p>}
       </div>
 
       <div className="card stack">

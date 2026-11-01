@@ -38,6 +38,8 @@ export interface Exercise {
   metric: Metric;
   /** Aerobic work, counted toward weekly cardio minutes. */
   cardio?: boolean;
+  /** A sport or recreational activity (volleyball, yoga…). */
+  sport?: boolean;
   custom?: boolean;
 }
 
@@ -45,8 +47,8 @@ export interface SetLog {
   id: string;
   weight: number | null;
   reps: number | null;
-  /** Reps in reserve (how many more reps you could have done). Optional. */
-  rir: number | null;
+  /** Rate of perceived exertion, 1–10 (10 = max effort, no reps left). Optional. */
+  rpe: number | null;
   durationSec?: number | null;
   /** In the user's distance unit. */
   distance?: number | null;
@@ -58,9 +60,11 @@ export interface ExerciseLog {
   exerciseId: string;
   /** Overrides the exercise's default way of logging. */
   metric?: Metric;
+  /** Rest between sets in seconds; falls back to the app default. */
+  restSec?: number;
   sets: SetLog[];
   /** Target carried over from a template/plan, shown as a hint. */
-  target?: { repMin: number; repMax: number; rir?: number; minutes?: number | null; distance?: number | null };
+  target?: { repMin: number; repMax: number; rpe?: number; minutes?: number | null; distance?: number | null };
   note?: string;
 }
 
@@ -80,7 +84,9 @@ export interface TemplateExercise {
   sets: number;
   repMin: number;
   repMax: number;
-  rir?: number;
+  /** Target RPE (1–10). */
+  rpe?: number;
+  restSec?: number;
   /** Suggested working weight in the user's unit. */
   weight?: number | null;
   /** Time & distance targets. */
@@ -139,15 +145,31 @@ export interface BasePlan {
   /** Weekly hard-set target per muscle. */
   setTargets: Record<Muscle, number>;
   repRanges: { compound: [number, number]; isolation: [number, number] };
-  rir: number;
+  /** Default target RPE for working sets. */
+  rpe: number;
   cardioMinutes: number;
   principles: PlanPrinciple[];
   days: PlanDay[];
+  /** Sports and other activities on fixed weekdays. */
+  activities: Activity[];
+}
+
+export type Intensity = 'light' | 'moderate' | 'hard';
+
+export interface Activity {
+  id: string;
+  exerciseId: string;
+  /** 0 = Sunday … 6 = Saturday */
+  weekdays: number[];
+  minutes: number;
+  intensity: Intensity;
 }
 
 export interface WeekPlanDay {
   day: string;
   focus: string;
+  /** Sport/activity planned that day, e.g. "Volleyball 60 min". */
+  activity?: string;
 }
 
 export interface Recommendation {
@@ -165,8 +187,14 @@ export interface Recommendation {
   warning?: string;
 }
 
+/** Wire format: OpenAI-style chat completions, or Anthropic's Messages API. */
+export type LlmApi = 'openai' | 'anthropic';
+
 export interface LlmSettings {
   enabled: boolean;
+  api: LlmApi;
+  /** Which preset the settings came from (for the UI). */
+  preset: string;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -178,6 +206,8 @@ export interface AppState {
   version: 2;
   unit: Unit;
   distanceUnit: DistanceUnit;
+  /** Default rest between sets, seconds. */
+  defaultRestSec: number;
   plan: BasePlan;
   planHistory: BasePlan[];
   llm: LlmSettings;

@@ -179,7 +179,7 @@ export function e1rm(weight: number, reps: number): number {
 export interface LoggedSet {
   weight: number;
   reps: number;
-  rir: number | null;
+  rpe: number | null;
   durationSec: number;
   distance: number;
 }
@@ -194,7 +194,7 @@ export interface ExerciseHistory {
 }
 
 function toLogged(x: SetLog): LoggedSet {
-  return { weight: x.weight ?? 0, reps: x.reps ?? 0, rir: x.rir, durationSec: x.durationSec ?? 0, distance: x.distance ?? 0 };
+  return { weight: x.weight ?? 0, reps: x.reps ?? 0, rpe: x.rpe, durationSec: x.durationSec ?? 0, distance: x.distance ?? 0 };
 }
 
 export function exerciseHistory(sessions: Session[]): Map<string, ExerciseHistory> {
