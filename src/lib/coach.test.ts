@@ -821,3 +821,45 @@ describe('cardio machines', () => {
     expect(st.plan.profile.equipment).not.toContain('cardio');
   });
 });
+
+describe("today's workout matches a coach-changed day", () => {
+  const MON_AM = new Date(2026, 10, 2, 13, 31);
+  const MON_PM = new Date(2026, 10, 2, 16, 21);
+  const p: BasePlan = { ...plan, startDate: '2026-10-12', reviewDate: '2026-11-23', days: [
+    { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [{ exerciseId: 'accel-sprint', metric: 'time_distance', sets: 6, repMin: 0, repMax: 0, distance: 20 }, { exerciseId: 'broad-jump', sets: 3, repMin: 3, repMax: 3 }] },
+    { id: 'u', name: 'Upper', weekdays: [4], exercises: [{ exerciseId: 'bench-press', sets: 4, repMin: 4, repMax: 6 }] },
+  ] };
+  const morningInput = { ...input, plan: p, now: MON_AM };
+  const morning = { ...parseRecommendation({
+    weekPlan: [{ day: 'Today', focus: 'Recovery Cardio + Plyos (modified)' }],
+    changes: [{ day: 'Mon', change: 'Swapped outdoor sprints for indoor cardio', reason: 'Cold symptoms', scope: 'today' }],
+    today: { name: 'Recovery Cardio + Plyos (modified)', exercises: [{ exerciseId: 'bike', minutes: 20 }, { exerciseId: 'goblet-squat', sets: 3, repMin: 5, repMax: 5 }] },
+  }, morningInput, planWithRules(morningInput), 'm'), createdAt: MON_AM.toISOString() };
+  const pmInput = { ...input, plan: p, now: MON_PM, previous: morning };
+
+  it("uses the model's workout even when it names it differently from the strip", () => {
+    const rec = parseRecommendation({
+      weekPlan: [{ day: 'Today', focus: 'Recovery Cardio + Plyos (modified)' }],
+      changes: [],
+      today: { name: 'Indoor Monday session', exercises: [{ exerciseId: 'bike', minutes: 20 }, { exerciseId: 'goblet-squat', sets: 3, repMin: 5, repMax: 5 }] },
+    }, pmInput, planWithRules(pmInput), 'm');
+    expect(rec.weekPlan[0].focus).toBe('Recovery Cardio + Plyos (modified)');
+    expect(rec.today.name).toBe('Recovery Cardio + Plyos (modified)');
+    expect(rec.today.exercises.map((e) => e.exerciseId)).toEqual(['bike', 'goblet-squat']);
+    expect(rec.changes?.map((c) => c.change)).toEqual(['Swapped outdoor sprints for indoor cardio']); // carried
+  });
+
+  it("reuses this morning's workout when the model doesn't resend one, never the original sprints", () => {
+    const rec = parseRecommendation({ weekPlan: [{ day: 'Today', focus: 'Recovery Cardio + Plyos (modified)' }], today: { name: 'Same as before', exercises: [] } }, pmInput, planWithRules(pmInput), 'm');
+    expect(rec.today.exercises.map((e) => e.exerciseId)).toEqual(['bike', 'goblet-squat']);
+  });
+
+  it('replaces earlier notes for a day the model changes again', () => {
+    const rec = parseRecommendation({
+      weekPlan: [{ day: 'Today', focus: 'Recovery Cardio + Plyos (modified)' }],
+      changes: [{ day: 'Mon', change: 'Indoor bike 20 min + goblet squats instead of sprints and broad jumps', reason: 'Cold symptoms and limited space', scope: 'today' }],
+      today: { name: 'Recovery Cardio + Plyos (modified)', exercises: [{ exerciseId: 'bike', minutes: 20 }] },
+    }, pmInput, planWithRules(pmInput), 'm');
+    expect(rec.changes?.map((c) => c.change)).toEqual(['Indoor bike 20 min + goblet squats instead of sprints and broad jumps']);
+  });
+});

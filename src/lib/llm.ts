@@ -40,6 +40,7 @@ Rules:
   • replace a session with a different one (e.g. "Recovery: mobility + easy bike 20 min").
 - Every change must follow the principles and the user's own rules above (e.g. no make-up volume, 48 h between heavy lower-body lifts, never sprint on tired legs, respect session length). List each one in "changes" with the day, what changed, the reason, and the principle or rule it follows. Changes without a reason are ignored by the app.
 - Leave all other days exactly as in CURRENT_WEEK, and make the summary match the weekPlan you return.
+- If you change a day that already has earlier changes, restate every change for that day in "changes" as it now stands — they replace the earlier notes for that day.
 - "today" is the session on today's weekPlan entry, named the same way, with its full exercise list (shortened or swapped if you changed it). If today is a rest day, return the next scheduled session and say so. Never return a "daily" routine (e.g. a morning routine) as today's workout; the app shows routines separately.
 - BASE_PLAN days with fixed weekdays are the default schedule. "daily" days are routines done every day. Each exercise's "thisWeek" is the prescription for the current week of the block and overrides its default sets/reps; put it in the exercise note.
 - If STATUS.missedThisWeek lists sessions, don't schedule make-up sessions on top of the week; apply the user's own rules (e.g. a drop order or minimum viable week) and say what to skip or merge.
@@ -288,14 +289,30 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
     const entry = off === -1 ? undefined : merged[off];
     const planDay = entry?.planDay;
     const label = entry?.day.focus ?? '';
+    const lc = (x: string) => x.toLowerCase();
+    const dailyNames = input.plan.days.filter(isDaily).map((x) => lc(x.name));
+    const aiIsRoutine = !!aiName && dailyNames.some((n) => lc(aiName).includes(n));
     const aiMatches =
       exercises.length > 0 &&
       !!aiName &&
-      (label.toLowerCase().includes(aiName.toLowerCase()) || aiName.toLowerCase().includes(label.toLowerCase()) || (!!planDay && aiName.toLowerCase().includes(planDay.name.toLowerCase())));
+      (lc(label).includes(lc(aiName)) || lc(aiName).includes(lc(label)) || (!!planDay && lc(aiName).includes(lc(planDay.name))));
+    // The previous refresh's workout, if it was made today for this same day.
+    const prev = input.previous;
+    const prevToday =
+      prev && isoDate(new Date(prev.createdAt)) === isoDate(now) && entry && (lc(prev.today.name) === lc(label) || lc(label).includes(lc(prev.today.name)))
+        ? prev.today
+        : undefined;
     if (entry && aiMatches) todayOut = { name: aiName, exercises };
-    else if (planDay) {
+    else if (off === 0 && entry && exercises.length && !aiIsRoutine && (entry.kind === 'new' || entry.day.changed)) {
+      // Today holds a session the coach changed: its workout is the one the model sent, named like the strip.
+      todayOut = { name: label, exercises };
+    } else if (off === 0 && entry && entry.kind === 'new' && prevToday) {
+      todayOut = { ...prevToday, name: label };
+    } else if (planDay) {
       const built = startablePlanDay(planDay, input.plan, input.unit, input.sessions, input.customExercises, addDays(now, off));
       todayOut = { name: built.name, exercises: built.exercises };
+    } else if (entry && prevToday) {
+      todayOut = { ...prevToday, name: label };
     } else todayOut = base.recommendation.today;
   } else {
     if (!exercises.length) throw new Error('Model plan had no recognisable exercises');

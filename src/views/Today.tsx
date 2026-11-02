@@ -210,7 +210,12 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
                   </li>
                 ))}
               </ul>
-              <p className="small muted" style={{ margin: '4px 0 0' }}>Your base plan is unchanged; next week starts from it again.</p>
+              <div className="row spread wrap" style={{ marginTop: 4 }}>
+                <span className="small muted">Your base plan is unchanged; next week starts from it again.</span>
+                <button className="btn small ghost" onClick={() => confirm("Undo the coach's changes for this week and go back to your base plan?") && update((d) => void (d.recommendation = null))}>
+                  Reset to base plan
+                </button>
+              </div>
             </div>
           ) : null}
           {recThisWeek && !stale && (
