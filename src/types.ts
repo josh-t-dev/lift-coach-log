@@ -15,7 +15,16 @@ export const MUSCLES = [
 ] as const;
 export type Muscle = (typeof MUSCLES)[number];
 
-export const EQUIPMENT = ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'] as const;
+export const EQUIPMENT = ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight', 'cardio'] as const;
+/** How equipment is shown to the user. 'machine' = strength machines; 'cardio' = bike, rower, etc. */
+export const EQUIPMENT_LABEL: Record<(typeof EQUIPMENT)[number], string> = {
+  barbell: 'barbell',
+  dumbbell: 'dumbbells',
+  machine: 'strength machines',
+  cable: 'cables',
+  bodyweight: 'bodyweight',
+  cardio: 'cardio machines (bike, rower…)',
+};
 export type Equipment = (typeof EQUIPMENT)[number];
 
 /** How an exercise is logged. */
@@ -239,7 +248,7 @@ export interface LlmSettings {
 }
 
 export interface AppState {
-  version: 2;
+  version: 3;
   unit: Unit;
   distanceUnit: DistanceUnit;
   /** Default rest between sets, seconds. */

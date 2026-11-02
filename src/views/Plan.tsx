@@ -7,7 +7,7 @@ import { defaultPrinciples } from '../lib/evidence';
 import { suggestRules, type SuggestedRule } from '../lib/llm';
 import { generateBasePlan, generateDays, projectedCardioMinutes, projectedWeeklySets, resetTargets } from '../lib/planner';
 import { importPlan, uid, update, useAppState } from '../store';
-import { EQUIPMENT, MUSCLES, type Activity, type BasePlan, type EvidenceLevel, type Experience, type Goal, type Intensity, type PlanDay } from '../types';
+import { EQUIPMENT, EQUIPMENT_LABEL, MUSCLES, type Activity, type BasePlan, type EvidenceLevel, type Experience, type Goal, type Intensity, type PlanDay } from '../types';
 import { describeTarget, RPE_OPTIONS, rpeHint, WorkoutEditor } from './Workouts';
 
 function editPlan(fn: (p: BasePlan) => void) {
@@ -180,7 +180,7 @@ export function Plan() {
             {EQUIPMENT.map((x) => (
               <button key={x} className={`chip ${p.equipment.includes(x) ? 'on' : ''}`} aria-pressed={p.equipment.includes(x)}
                 onClick={() => editPlan((pl) => void (pl.profile.equipment = p.equipment.includes(x) ? p.equipment.filter((y) => y !== x) : [...p.equipment, x]))}>
-                {x}
+                {EQUIPMENT_LABEL[x]}
               </button>
             ))}
           </div>
@@ -602,7 +602,7 @@ function PlanFileButtons() {
     <>
       <button className="btn" onClick={() => {
         const used = new Set(state.plan.days.flatMap((d) => d.exercises.map((e) => e.exerciseId)).concat(state.plan.activities.map((a) => a.exerciseId)));
-        const data = { kind: 'lift-log-plan', version: 1, plan: state.plan, customExercises: state.customExercises.filter((e) => used.has(e.id)) };
+        const data = { kind: 'lift-log-plan', version: 2, plan: state.plan, customExercises: state.customExercises.filter((e) => used.has(e.id)) };
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
         a.download = `${state.plan.name.replace(/[^\w-]+/g, '-').toLowerCase() || 'plan'}.json`;

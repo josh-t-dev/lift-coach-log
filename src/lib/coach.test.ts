@@ -5,7 +5,7 @@ import { upcomingChanges, weekView } from './week';
 import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
-import { buildRuleSystemPrompt, buildRuleUserPrompt, buildSystemPrompt, buildUserPrompt, extractJson, parseRecommendation, recommend, suggestRules } from './llm';
+import { buildRuleSystemPrompt, buildRuleUserPrompt, buildSystemPrompt, buildUserPrompt, exercisePool, extractJson, parseRecommendation, recommend, suggestRules } from './llm';
 import { generateBasePlan, planWithRules, projectedWeeklySets } from './planner';
 
 const profile: Profile = {
@@ -13,7 +13,7 @@ const profile: Profile = {
   experience: 'intermediate',
   daysPerWeek: 3,
   sessionMinutes: 60,
-  equipment: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'],
+  equipment: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight', 'cardio'],
   notes: '',
 };
 
@@ -313,7 +313,7 @@ describe('storage migration', () => {
   it('turns a v1 profile into the first base plan and keeps workouts', () => {
     const v1 = { version: 1, unit: 'lb', profile: { ...profile, daysPerWeek: 4, goal: 'strength' }, sessions: [session(2, 'A', [['bench-press', 3, 185, 5]])], templates: [] };
     const st = hydrate(v1);
-    expect(st.version).toBe(2);
+    expect(st.version).toBe(3);
     expect(st.plan.profile.daysPerWeek).toBe(4);
     expect(st.plan.days.map((d) => d.name)).toEqual(['Upper A', 'Lower A', 'Upper B', 'Lower B']);
     expect(st.plan.repRanges.compound).toEqual([3, 6]);
@@ -797,5 +797,27 @@ describe('this week: dates, carry-forward and scope', () => {
     expect(tueRec.weekPlan[1]).toMatchObject({ focus: 'Basketball 60 min', changed: true }); // Wed still skipped
     expect(tueRec.changes?.map((c) => c.date)).toEqual(['2026-11-04', '2026-11-03']);
     expect(tueRec.today.name).toBe('Recovery: mobility 20 min');
+  });
+});
+
+describe('cardio machines', () => {
+  const noMachines = { ...profile, equipment: ['barbell', 'dumbbell', 'cable', 'bodyweight'] as Profile['equipment'] };
+
+  it('turns cardio machines on for existing data, so the coach can pick the stationary bike', () => {
+    const old = { version: 2, plan: generateBasePlan(noMachines, { now: NOW }), sessions: [] };
+    expect(exercisePool(old.plan, []).some((e) => e.id === 'bike')).toBe(false); // the bug: bike hidden
+    const st = hydrate(structuredClone(old));
+    expect(st.plan.profile.equipment).toContain('cardio');
+    expect(exercisePool(st.plan, []).map((e) => e.id)).toEqual(expect.arrayContaining(['bike', 'rower', 'elliptical']));
+    expect(exercisePool(st.plan, []).some((e) => e.id === 'leg-extension')).toBe(false); // strength machines still off
+  });
+
+  it('adds cardio machines when importing an older plan file, and respects them being off afterwards', () => {
+    const { plan: imported } = importPlan({ kind: 'lift-log-plan', version: 1, plan: generateBasePlan(noMachines, { now: NOW }) });
+    expect(imported.profile.equipment).toContain('cardio');
+    const { plan: v2 } = importPlan({ kind: 'lift-log-plan', version: 2, plan: generateBasePlan(noMachines, { now: NOW }) });
+    expect(v2.profile.equipment).not.toContain('cardio');
+    const st = hydrate({ version: 3, plan: generateBasePlan(noMachines, { now: NOW }) });
+    expect(st.plan.profile.equipment).not.toContain('cardio');
   });
 });

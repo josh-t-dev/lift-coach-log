@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { allExercises } from '../data/exercises';
 import { update, uid, useAppState } from '../store';
-import { EQUIPMENT, METRIC_LABEL, MUSCLES, type Equipment, type Exercise, type Metric, type Muscle } from '../types';
+import { EQUIPMENT, EQUIPMENT_LABEL, METRIC_LABEL, MUSCLES, type Equipment, type Exercise, type Metric, type Muscle } from '../types';
 
 export function ExercisePicker({ onPick, onClose }: { onPick: (ex: Exercise, metric: Metric) => void; onClose: () => void }) {
   const state = useAppState();
@@ -125,7 +125,7 @@ function CustomExerciseForm({ initialName, onCreate, onCancel }: { initialName: 
         <label className="field">
           <span>Equipment</span>
           <select value={equipment} onChange={(e) => setEquipment(e.target.value as Equipment)}>
-            {EQUIPMENT.map((x) => <option key={x}>{x}</option>)}
+            {EQUIPMENT.map((x) => <option key={x} value={x}>{EQUIPMENT_LABEL[x]}</option>)}
           </select>
         </label>
         <label className="field">

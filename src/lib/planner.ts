@@ -141,7 +141,7 @@ export function generateDays(
   else for (const d of days) for (const e of d.exercises) e.sets = Math.min(cap, 3);
 
   if (cardioPerDay) {
-    const cardioId = profile.equipment.includes('machine') ? 'bike' : 'walk';
+    const cardioId = profile.equipment.includes('cardio') ? 'bike' : 'walk';
     for (const d of days)
       d.exercises.push({ exerciseId: cardioId, metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: cardioPerDay, note: 'Easy pace — you can still hold a conversation' });
   }

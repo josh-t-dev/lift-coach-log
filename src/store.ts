@@ -15,13 +15,13 @@ export const DEFAULT_PROFILE: Profile = {
   experience: 'intermediate',
   daysPerWeek: 3,
   sessionMinutes: 60,
-  equipment: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'],
+  equipment: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight', 'cardio'],
   notes: '',
 };
 
 export function initialState(): AppState {
   return {
-    version: 2,
+    version: 3,
     unit: 'kg',
     distanceUnit: 'km',
     defaultRestSec: 90,
@@ -53,6 +53,9 @@ export function hydrate(raw: unknown): AppState {
   } else {
     plan = generateBasePlan({ ...DEFAULT_PROFILE, ...(r.profile ?? {}) }, { sessions, custom });
   }
+  // Version 3 split cardio machines (bike, rower…) out of 'machine'. Turn them on
+  // once for existing data so cardio options don't silently disappear.
+  if (((r as { version?: number }).version ?? 1) < 3) plan = withCardioEquipment(plan);
   return {
     ...base,
     unit: r.unit === 'lb' ? 'lb' : 'kg',
@@ -214,8 +217,13 @@ export function exportJson(): string {
 }
 
 /** Validate a plan file ({ kind: 'lift-log-plan', plan, customExercises }). */
+function withCardioEquipment(plan: BasePlan): BasePlan {
+  const eq = plan.profile.equipment;
+  return eq.includes('cardio') ? plan : { ...plan, profile: { ...plan.profile, equipment: [...eq, 'cardio'] } };
+}
+
 export function importPlan(raw: unknown): { plan: BasePlan; customExercises: Exercise[] } {
-  const r = raw as { kind?: string; plan?: Partial<BasePlan>; customExercises?: Exercise[] };
+  const r = raw as { kind?: string; version?: number; plan?: Partial<BasePlan>; customExercises?: Exercise[] };
   if (!r || r.kind !== 'lift-log-plan' || !r.plan || typeof r.plan !== 'object') throw new Error('missing "lift-log-plan" header');
   if (!Array.isArray(r.plan.days) || !r.plan.days.length) throw new Error('plan has no days');
   const base = generateBasePlan(DEFAULT_PROFILE);
@@ -233,8 +241,9 @@ export function importPlan(raw: unknown): { plan: BasePlan; customExercises: Exe
     updatedAt: new Date().toISOString(),
     endDate: undefined,
   };
+  const finalPlan = (r.version ?? 1) < 2 ? withCardioEquipment(plan) : plan;
   const customExercises = (Array.isArray(r.customExercises) ? r.customExercises : [])
     .filter((e) => e && typeof e.id === 'string' && typeof e.name === 'string')
     .map((e) => ({ ...e, metric: e.metric ?? 'weight_reps', primary: e.primary ?? [], secondary: e.secondary ?? [], custom: true }));
-  return { plan, customExercises };
+  return { plan: finalPlan, customExercises };
 }
