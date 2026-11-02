@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { findExercise } from '../data/exercises';
 import { hydrate, importPlan } from '../store';
 import { upcomingChanges, weekView } from './week';
+import { shortLabel } from '../views/Today';
 import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
-import { buildRuleSystemPrompt, buildRuleUserPrompt, buildSystemPrompt, buildUserPrompt, exercisePool, extractJson, parseRecommendation, recommend, suggestRules } from './llm';
+import { buildRuleSystemPrompt, buildRuleUserPrompt, buildSystemPrompt, buildUserPrompt, exercisePool, recentNotes, extractJson, parseRecommendation, recommend, suggestRules } from './llm';
 import { generateBasePlan, planWithRules, projectedWeeklySets } from './planner';
 
 const profile: Profile = {
@@ -861,5 +862,46 @@ describe("today's workout matches a coach-changed day", () => {
       today: { name: 'Recovery Cardio + Plyos (modified)', exercises: [{ exerciseId: 'bike', minutes: 20 }] },
     }, pmInput, planWithRules(pmInput), 'm');
     expect(rec.changes?.map((c) => c.change)).toEqual(['Indoor bike 20 min + goblet squats instead of sprints and broad jumps']);
+  });
+});
+
+describe('coach memory and compact labels', () => {
+  const MON = new Date(2026, 10, 2, 16, 30);
+
+  it('sends earlier notes from this week / last 3 days and the workout given earlier today', () => {
+    const notes = [
+      { at: new Date(2026, 9, 25, 9).toISOString(), text: 'old note from two weeks ago' },
+      { at: new Date(2026, 9, 31, 9).toISOString(), text: 'knee a bit sore' }, // Saturday, within 3 days
+      { at: new Date(2026, 10, 2, 13, 31).toISOString(), text: 'no space for broad jumps, cold' },
+    ];
+    const recent = recentNotes(notes, MON);
+    expect(recent.map((n) => n.note)).toEqual(['knee a bit sore', 'no space for broad jumps, cold']);
+    expect(recent[1].when).toMatch(/^today 13:31/);
+    const previous = { ...planWithRules({ ...input, now: MON }).recommendation, createdAt: new Date(2026, 10, 2, 13, 31).toISOString(),
+      today: { name: 'Bike + Plyos', exercises: [{ exerciseId: 'bike', metric: 'time_distance' as const, sets: 1, repMin: 0, repMax: 0, minutes: 20 }, { exerciseId: 'goblet-squat', sets: 3, repMin: 5, repMax: 6 }] } };
+    const inp = { ...input, now: MON, notes, previous };
+    const prompt = buildUserPrompt(inp, planWithRules(inp), 'make it 30 min');
+    expect(prompt).toContain('no space for broad jumps, cold');
+    expect(prompt).not.toContain('old note from two weeks ago');
+    expect(prompt).toContain('"TODAYS_CURRENT_WORKOUT"');
+    expect(prompt).toContain('Goblet Squat');
+    expect(buildSystemPrompt(plan)).toMatch(/never bring back exercises that were removed for a reason/);
+  });
+
+  it('keeps notes through storage', () => {
+    const st = hydrate({ version: 3, plan, coachNotes: [{ at: MON.toISOString(), text: 'no space' }, { bad: true }] });
+    expect(st.coachNotes).toEqual([{ at: MON.toISOString(), text: 'no space' }]);
+    expect(hydrate({ version: 3, plan }).coachNotes).toEqual([]);
+  });
+
+  it('shortens week-square labels', () => {
+    expect(shortLabel('Bike Cardio + Plyos')).toBe('Bike + Plyos');
+    expect(shortLabel('Recovery Cardio + Plyos (modified)')).toBe('Recovery + Plyos');
+    expect(shortLabel('Rest / easy cardio')).toBe('Rest');
+    expect(shortLabel('Basketball 60 min')).toBe('Basketball');
+    expect(shortLabel('Upper (short)')).toBe('Upper (short)');
+    expect(shortLabel('Indoor Bike Cardio Session')).toBe('Indoor Bike');
+    expect(shortLabel('Cardio')).toBe('Cardio');
+    expect(shortLabel('Speed + Power + Lower B')).toBe('Speed + Power + Lower B');
   });
 });

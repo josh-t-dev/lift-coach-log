@@ -37,6 +37,8 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   );
   const todayCell = cells.find((c) => c.status === 'today');
   const changesAhead = upcomingChanges(recThisWeek, now);
+  const noteSince = Math.min(weekStart(now).getTime(), now.getTime() - 3 * 86_400_000);
+  const rememberedNotes = state.coachNotes.filter((n) => new Date(n.at).getTime() >= noteSince);
   const todaysActivities = (plan.activities ?? [])
     .filter((a) => a.weekdays.includes(new Date().getDay()))
     // Hide a sport the coach skipped for today.
@@ -48,13 +50,23 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
     abort.current = ctl;
     setLoading(true);
     try {
+      const note = request.trim();
       const r = await recommend(
-        { plan, unit: state.unit, distanceUnit: state.distanceUnit, sessions: state.sessions, customExercises: state.customExercises, previous: state.recommendation },
+        {
+          plan, unit: state.unit, distanceUnit: state.distanceUnit, sessions: state.sessions, customExercises: state.customExercises,
+          previous: state.recommendation,
+          notes: state.coachNotes,
+        },
         state.llm,
-        request,
+        note,
         ctl.signal,
       );
-      update((d) => void (d.recommendation = r));
+      update((d) => {
+        d.recommendation = r;
+        // Remember what the user told the coach, so later refreshes keep honoring it.
+        if (note) d.coachNotes = [...d.coachNotes, { at: new Date().toISOString(), text: note }].slice(-50);
+      });
+      if (note) setRequest('');
     } catch {
       // aborted
     } finally {
@@ -274,6 +286,24 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
           <button className="btn block" onClick={ask} disabled={loading}>
             {loading ? <><span className="spinner" /> Thinking…</> : rec ? 'Refresh plan' : 'Plan my week'}
           </button>
+          {rememberedNotes.length > 0 && (
+            <div className="small">
+              <span className="muted">Coach remembers (this week & last few days):</span>
+              <ul className="remembered">
+                {rememberedNotes.map((n, i) => (
+                  <li key={`${n.at}-${i}`}>
+                    <span className="muted">{new Date(n.at).toLocaleDateString(undefined, { weekday: 'short' })}</span> {n.text}
+                    <button className="btn ghost small" aria-label={`Forget: ${n.text}`} title="Forget this note"
+                      onClick={() => update((d) => {
+                        // Remove exactly this note (two notes can share a timestamp).
+                        const idx = d.coachNotes.findIndex((x) => x.at === n.at && x.text === n.text);
+                        if (idx !== -1) d.coachNotes.splice(idx, 1);
+                      })}>✕</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
@@ -325,9 +355,9 @@ function WeekStrip({ cells }: { cells: WeekCell[] }) {
       <div key={c.date} className={cls} title={c.changed ? 'Changed by the coach this week' : undefined}>
         <b>{c.status === 'today' ? 'Today' : WD3[c.weekday]}</b>
         {c.status === 'done' && '✓ '}
-        {c.focus.replace(/ \d+ min/g, '')}
+        {shortLabel(c.focus)}
         {c.status === 'missed' && <span className="small"> · missed</span>}
-        {c.activity && c.activity !== c.focus && c.status !== 'missed' && <i>+ {c.activity.replace(/ \d+ min/g, '')}</i>}
+        {c.activity && c.activity !== c.focus && c.status !== 'missed' && <i>+ {shortLabel(c.activity)}</i>}
       </div>
     );
   };
@@ -354,4 +384,22 @@ function timedTarget(e: TemplateExercise, state: AppState): string {
   const ex = findExercise(e.exerciseId, state.customExercises);
   if (ex?.distUnit === 'm') return e.distance ? `${e.sets} × ${e.distance} m` : `${e.sets} reps`;
   return [e.minutes ? `${e.minutes} min` : '', e.distance ? `${e.distance} ${state.distanceUnit}` : ''].filter(Boolean).join(' · ');
+}
+
+/**
+ * Compact label for the week squares: "Bike Cardio + Plyos (modified)" → "Bike + Plyos",
+ * "Rest / easy cardio" → "Rest", "Basketball 60 min" → "Basketball". Display only.
+ */
+export function shortLabel(label: string): string {
+  if (/^rest\b/i.test(label.trim())) return 'Rest';
+  const out = label
+    .replace(/ \d+\s?min\b/gi, '')
+    .replace(/\s*\((modified|adjusted|changed|updated|swapped|indoor version)\)/gi, '')
+    .replace(/\b(session|workout|training)\b/gi, '')
+    .replace(/(\w)\s+cardio\b/gi, '$1') // "Bike Cardio" → "Bike"; a lone "Cardio" stays
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([+/])\s+/g, ' $1 ')
+    .replace(/^[\s+:–-]+|[\s+:–-]+$/g, '')
+    .trim();
+  return out || label;
 }

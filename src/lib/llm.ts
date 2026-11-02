@@ -7,8 +7,8 @@
  * a rule-based baseline plan, and must answer with JSON we validate.
  */
 import { allExercises, findExercise, metricOf } from '../data/exercises';
-import type { BasePlan, EvidenceLevel, Exercise, LlmSettings, PlanChange, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
-import { addDays, exerciseHistory, isoDate, isWorkingSet } from './analytics';
+import type { BasePlan, CoachNote, EvidenceLevel, Exercise, LlmSettings, PlanChange, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
+import { addDays, exerciseHistory, isoDate, isWorkingSet, weekStart } from './analytics';
 import { currentWeek, upcomingChanges, weekdayOfLabel } from './week';
 import { principlesText } from './evidence';
 import { activityLabel, availableExercises, isDaily, isPinned, planWithRules, startablePlanDay, type PlannerInput, type PlannerOutput } from './planner';
@@ -31,6 +31,8 @@ Rules:
 - Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
 - weekPlan has exactly 7 entries starting with TODAY, using short day names (Sun, Mon, Tue…). Start from CURRENT_WEEK: it is this week as it stands now, i.e. the base plan plus changes you already made earlier this week (changedEarlier: true, listed in EARLIER_CHANGES_THIS_WEEK). Keep earlier changes unless there is a reason to undo them; to undo one, put the base-plan session back and list it as a change.
+- EARLIER_NOTES_FROM_USER are things the user told you earlier this week or in the last few days (e.g. "no space for broad jumps", "knee sore"). Keep honoring them in today's workout and the week unless they clearly applied to a single past day only, or the user's new request says otherwise.
+- TODAYS_CURRENT_WORKOUT is the workout you already gave for today. Start from it and change only what the new request requires; never bring back exercises that were removed for a reason (space, pain, illness) unless the user asks.
 - Decide the scope of every change: does the user's request or the situation affect only today ("scope": "today"), or should the rest of the planned week change too ("scope": "week", e.g. moving a skipped lift, spacing hard days around it, or easing the following days after poor sleep)? Don't change later days without a reason, and check that later days still follow the rules after today's change (e.g. 48 h between heavy lower-body lifts, no sprints on tired legs).
 - A sport/activity can be skipped for a day only when the user asks or there's a clear reason (e.g. pain): leave it out of that day's focus and name it in the change (e.g. "Skipped yoga"). Never move or add sports.
 - You may adjust THIS WEEK ONLY, and only for a reason (missed sessions, the user's drop order, fatigue or poor sleep, a hard game, pain, limited time, or the user's request). Allowed changes:
@@ -145,6 +147,8 @@ export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string },
     },
     RECENT_SESSIONS: recent,
     LIFT_HISTORY: lifts,
+    EARLIER_NOTES_FROM_USER: recentNotes(input.notes, input.now ?? new Date()),
+    TODAYS_CURRENT_WORKOUT: todaysWorkout(input, customExercises),
     CURRENT_WEEK: currentWeek(base.recommendation.weekPlan, input.previous, input.now ?? new Date()).map((d) => ({ day: d.day, date: d.date, focus: d.focus, activity: d.activity ?? null, changedEarlier: !!d.changed })),
     EARLIER_CHANGES_THIS_WEEK: upcomingChanges(input.previous, input.now ?? new Date()).map((c) => ({ day: c.day, date: c.date, change: c.change, reason: c.reason, scope: c.scope ?? null })),
     BASELINE: {
@@ -496,4 +500,40 @@ function mergeWeek(input: PlannerInput, startWeek: WeekPlanDay[], aiWeek: WeekPl
       planDay: sessionDays.find((x) => x.name === names[0]),
     };
   });
+}
+
+/** The user's notes from this week or the last 3 days (whichever reaches further back), with when they were sent. */
+export function recentNotes(notes: CoachNote[] | undefined, now: Date): { when: string; note: string }[] {
+  if (!notes?.length) return [];
+  const since = Math.min(weekStart(now).getTime(), now.getTime() - 3 * 86_400_000);
+  return notes
+    .filter((n) => {
+      const t = new Date(n.at).getTime();
+      return t >= since && t <= now.getTime();
+    })
+    .slice(-12)
+    .map((n) => {
+      const d = new Date(n.at);
+      const sameDay = isoDate(d) === isoDate(now);
+      return {
+        when: `${sameDay ? 'today' : d.toLocaleDateString('en', { weekday: 'long' })} ${d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false })}`,
+        note: n.text,
+      };
+    });
+}
+
+/** The workout the coach gave earlier today, if any, in a compact form. */
+function todaysWorkout(input: PlannerInput, custom: Exercise[]) {
+  const prev = input.previous;
+  const now = input.now ?? new Date();
+  if (!prev || isoDate(new Date(prev.createdAt)) !== isoDate(now)) return null;
+  return {
+    name: prev.today.name,
+    exercises: prev.today.exercises.map((e) => ({
+      id: e.exerciseId,
+      name: findExercise(e.exerciseId, custom)?.name ?? e.exerciseId,
+      ...(e.minutes || e.distance ? { minutes: e.minutes ?? null, distance: e.distance ?? null } : { sets: e.sets, reps: `${e.repMin}-${e.repMax}`, rpe: e.rpe ?? null }),
+      note: e.note ?? undefined,
+    })),
+  };
 }

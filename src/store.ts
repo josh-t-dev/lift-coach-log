@@ -33,6 +33,7 @@ export function initialState(): AppState {
     active: null,
     customExercises: [],
     recommendation: null,
+    coachNotes: [],
   };
 }
 
@@ -69,6 +70,7 @@ export function hydrate(raw: unknown): AppState {
     customExercises: custom,
     active: r.active ?? null,
     recommendation: r.recommendation ?? null,
+    coachNotes: Array.isArray(r.coachNotes) ? r.coachNotes.filter((n) => n && typeof n.text === 'string' && typeof n.at === 'string').slice(-50) : [],
   };
 }
 

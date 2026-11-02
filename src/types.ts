@@ -261,4 +261,11 @@ export interface AppState {
   active: Session | null;
   customExercises: Exercise[];
   recommendation: Recommendation | null;
+  /** Notes the user sent the coach ("no space for broad jumps"), newest last. */
+  coachNotes: CoachNote[];
+}
+
+export interface CoachNote {
+  at: string; // ISO timestamp
+  text: string;
 }

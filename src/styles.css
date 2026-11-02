@@ -279,3 +279,7 @@ ul.bullets li { margin-bottom: 4px; font-size: 14px; }
 .plan-days > div.done { background: var(--accent-soft); }
 .plan-days > div.missed { background: var(--surface-2); color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
 .plan-days > div.missed .small { text-decoration: none; display: block; }
+
+.remembered { list-style: none; margin: 4px 0 0; padding: 0; }
+.remembered li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.remembered li .btn { margin-left: auto; min-height: 28px; padding: 2px 8px; }

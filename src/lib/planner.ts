@@ -7,7 +7,7 @@
  *     fallback when no LLM is available, and the baseline the LLM refines.
  */
 import { allExercises, findExercise, metricOf } from '../data/exercises';
-import type { Activity, BasePlan, Exercise, Muscle, PlanDay, Profile, Recommendation, Session, TemplateExercise, Unit, WeekPlanDay } from '../types';
+import type { Activity, BasePlan, CoachNote, Exercise, Muscle, PlanDay, Profile, Recommendation, Session, TemplateExercise, Unit, WeekPlanDay } from '../types';
 import { MUSCLES } from '../types';
 import { addDays, blockWeek, exerciseHistory, isoDate, sessionsBetween, snapshot, suggestLoad, weekStart, type TrainingSnapshot } from './analytics';
 import { CARDIO_MINUTES, defaultPrinciples, REP_RANGES, TARGET_RPE, WEEKLY_SET_TARGET } from './evidence';
@@ -333,6 +333,8 @@ export interface PlannerInput {
   plan: BasePlan;
   /** The last recommendation, so this week's earlier changes carry forward. */
   previous?: Recommendation | null;
+  /** Notes the user sent the coach earlier (the current request excluded). */
+  notes?: CoachNote[];
   unit: Unit;
   sessions: Session[];
   customExercises: Exercise[];
