@@ -274,3 +274,8 @@ ul.bullets li { margin-bottom: 4px; font-size: 14px; }
 .changed-dot::before { margin: 0 2px 0 0; }
 .changes { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
 .changes h3 { font-size: 14px; margin: 0; }
+
+.plan-days > div.past { opacity: .75; }
+.plan-days > div.done { background: var(--accent-soft); }
+.plan-days > div.missed { background: var(--surface-2); color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+.plan-days > div.missed .small { text-decoration: none; display: block; }

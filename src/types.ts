@@ -189,6 +189,8 @@ export interface WeekPlanDay {
   activity?: string;
   /** The coach changed this day from the base plan this week. */
   changed?: boolean;
+  /** Calendar date (YYYY-MM-DD) this entry is for. */
+  date?: string;
 }
 
 /** One change the coach made to this week, with its evidence-based reason. */
@@ -198,6 +200,10 @@ export interface PlanChange {
   reason: string;
   /** The principle or user rule it follows. */
   principle?: string;
+  /** Calendar date (YYYY-MM-DD) of the changed day. */
+  date?: string;
+  /** Whether the change is for today only or affects the rest of the week. */
+  scope?: 'today' | 'week';
 }
 
 export interface Recommendation {

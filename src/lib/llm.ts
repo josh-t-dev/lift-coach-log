@@ -8,7 +8,8 @@
  */
 import { allExercises, findExercise, metricOf } from '../data/exercises';
 import type { BasePlan, EvidenceLevel, Exercise, LlmSettings, PlanChange, Recommendation, SetLog, TemplateExercise, WeekPlanDay } from '../types';
-import { addDays, exerciseHistory, isWorkingSet } from './analytics';
+import { addDays, exerciseHistory, isoDate, isWorkingSet } from './analytics';
+import { currentWeek, upcomingChanges, weekdayOfLabel } from './week';
 import { principlesText } from './evidence';
 import { activityLabel, availableExercises, isDaily, isPinned, planWithRules, startablePlanDay, type PlannerInput, type PlannerOutput } from './planner';
 import { chat } from './providers';
@@ -29,14 +30,16 @@ Rules:
 - Start from BASELINE (the base plan day with this week's progressed loads already worked out). Use its weights unless you have a data-backed reason; use null when unknown.
 - Base every recommendation on the user's actual data provided. Never invent history.
 - Only use exercise ids from AVAILABLE_EXERCISES.
-- weekPlan has exactly 7 entries starting with TODAY, using short day names (Sun, Mon, Tue…). Start from BASELINE.weekPlan.
+- weekPlan has exactly 7 entries starting with TODAY, using short day names (Sun, Mon, Tue…). Start from CURRENT_WEEK: it is this week as it stands now, i.e. the base plan plus changes you already made earlier this week (changedEarlier: true, listed in EARLIER_CHANGES_THIS_WEEK). Keep earlier changes unless there is a reason to undo them; to undo one, put the base-plan session back and list it as a change.
+- Decide the scope of every change: does the user's request or the situation affect only today ("scope": "today"), or should the rest of the planned week change too ("scope": "week", e.g. moving a skipped lift, spacing hard days around it, or easing the following days after poor sleep)? Don't change later days without a reason, and check that later days still follow the rules after today's change (e.g. 48 h between heavy lower-body lifts, no sprints on tired legs).
+- A sport/activity can be skipped for a day only when the user asks or there's a clear reason (e.g. pain): leave it out of that day's focus and name it in the change (e.g. "Skipped yoga"). Never move or add sports.
 - You may adjust THIS WEEK ONLY, and only for a reason (missed sessions, the user's drop order, fatigue or poor sleep, a hard game, pain, limited time, or the user's request). Allowed changes:
   • skip a session (focus "Rest") or move it to another day;
   • shorten a session (fewer sets or exercises; keep the key lifts/sprints) — label it with the plan day name, e.g. "Upper (short)";
   • swap exercises for evidence-based alternatives (e.g. goblet squat instead of back squat when the knee flares);
   • replace a session with a different one (e.g. "Recovery: mobility + easy bike 20 min").
 - Every change must follow the principles and the user's own rules above (e.g. no make-up volume, 48 h between heavy lower-body lifts, never sprint on tired legs, respect session length). List each one in "changes" with the day, what changed, the reason, and the principle or rule it follows. Changes without a reason are ignored by the app.
-- Sports/activities are fixed — never move or remove them. Leave all other days exactly as in BASELINE.weekPlan, and make the summary match the weekPlan you return.
+- Leave all other days exactly as in CURRENT_WEEK, and make the summary match the weekPlan you return.
 - "today" is the session on today's weekPlan entry, named the same way, with its full exercise list (shortened or swapped if you changed it). If today is a rest day, return the next scheduled session and say so. Never return a "daily" routine (e.g. a morning routine) as today's workout; the app shows routines separately.
 - BASE_PLAN days with fixed weekdays are the default schedule. "daily" days are routines done every day. Each exercise's "thisWeek" is the prescription for the current week of the block and overrides its default sets/reps; put it in the exercise note.
 - If STATUS.missedThisWeek lists sessions, don't schedule make-up sessions on top of the week; apply the user's own rules (e.g. a drop order or minimum viable week) and say what to skip or merge.
@@ -53,7 +56,7 @@ Reply with ONLY a JSON object, no markdown, matching:
   "summary": string,                  // 1-3 sentences on this week and why
   "rationale": string[],              // 2-5 bullets, each tied to a principle or the user's data
   "weekPlan": [{"day": string, "focus": string, "activity": string|null}],  // the next 7 days starting today; activity = sport that day
-  "changes": [{"day": string, "change": string, "reason": string, "principle": string}],  // every difference from BASELINE, with the principle/rule it follows; [] if none
+  "changes": [{"day": string, "change": string, "reason": string, "principle": string, "scope": "today" | "week"}],  // every NEW difference from CURRENT_WEEK, with the principle/rule it follows; [] if none
   "today": {
     "name": string,
     "exercises": [{"exerciseId": string, "sets": number, "repMin": number, "repMax": number, "rpe": number, "weight": number|null, "minutes": number|null, "distance": number|null, "note": string}]
@@ -141,6 +144,8 @@ export function buildUserPrompt(input: PlannerInput & { distanceUnit?: string },
     },
     RECENT_SESSIONS: recent,
     LIFT_HISTORY: lifts,
+    CURRENT_WEEK: currentWeek(base.recommendation.weekPlan, input.previous, input.now ?? new Date()).map((d) => ({ day: d.day, date: d.date, focus: d.focus, activity: d.activity ?? null, changedEarlier: !!d.changed })),
+    EARLIER_CHANGES_THIS_WEEK: upcomingChanges(input.previous, input.now ?? new Date()).map((c) => ({ day: c.day, date: c.date, change: c.change, reason: c.reason, scope: c.scope ?? null })),
     BASELINE: {
       headline: base.recommendation.headline,
       weekPlan: base.recommendation.weekPlan,
@@ -248,9 +253,25 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
 
   const changes: PlanChange[] = (Array.isArray(d.changes) ? d.changes : [])
     .map((c) => (c && typeof c === 'object' ? (c as Record<string, unknown>) : {}))
-    .map((c) => ({ day: str(c.day, 30), change: str(c.change, 160), reason: str(c.reason, 300), principle: str(c.principle, 120) || undefined }))
+    .map((c): PlanChange => ({
+      day: str(c.day, 30),
+      change: str(c.change, 160),
+      reason: str(c.reason, 300),
+      principle: str(c.principle, 120) || undefined,
+      scope: c.scope === 'week' ? 'week' : c.scope === 'today' ? 'today' : undefined,
+    }))
     .filter((c) => c.day && c.change && c.reason)
     .slice(0, 10);
+  {
+    // Date each new change, and carry forward earlier changes for days the model didn't change again.
+    const now0 = input.now ?? new Date();
+    for (const c of changes) {
+      const wd = weekdayOfLabel(c.day, now0);
+      for (let i = 0; i < 7 && wd >= 0 && !c.date; i++) if (addDays(now0, i).getDay() === wd) c.date = isoDate(addDays(now0, i));
+    }
+    const newDates = new Set(changes.map((c) => c.date));
+    changes.unshift(...upcomingChanges(input.previous, now0).filter((c) => !newDates.has(c.date)));
+  }
 
   let weekPlan: WeekPlanDay[];
   let todayOut: Recommendation['today'];
@@ -258,7 +279,9 @@ export function parseRecommendation(data: unknown, input: PlannerInput, base: Pl
     // Fixed-weekday plan: the base plan is the default; the model may adjust
     // this week (skip, move, shorten, swap, replace). New sessions need a
     // stated reason. Sports stay put.
-    const merged = mergeWeek(input, base, aiWeek, changes);
+    const now0 = input.now ?? new Date();
+    const startWeek = currentWeek(base.recommendation.weekPlan, input.previous, now0);
+    const merged = mergeWeek(input, startWeek, aiWeek, changes);
     weekPlan = merged.map((m) => m.day);
     const now = input.now ?? new Date();
     const off = merged.findIndex((m) => m.kind !== 'rest');
@@ -377,14 +400,7 @@ export async function suggestRules(plan: BasePlan, settings: LlmSettings, reques
   return parseRuleSuggestions(extractJson(reply));
 }
 
-const WEEKDAY3 = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
-/** Weekday (0 = Sun) named by a label like "Today", "Mon" or "Wednesday". */
-function weekdayOfLabel(label: string, now: Date): number {
-  const m = label.toLowerCase().match(/(sun|mon|tue|wed|thu|fri|sat)/);
-  if (m) return WEEKDAY3.indexOf(m[1]);
-  return /today/i.test(label) ? now.getDay() : -1;
-}
 
 /** Real (non-daily) plan sessions named in a schedule entry, longest names first. */
 function sessionsIn(plan: BasePlan, focus: string): string[] {
@@ -418,21 +434,34 @@ const REST_RE = /^(rest|off|rest day|day off|recovery day|rest \/ easy cardio|ea
  * reason in `changes` — put a new session there. Anything else keeps the
  * planned day. Sports always stay on their days.
  */
-function mergeWeek(input: PlannerInput, base: PlannerOutput, aiWeek: WeekPlanDay[], changes: PlanChange[]): Merged[] {
+function mergeWeek(input: PlannerInput, startWeek: WeekPlanDay[], aiWeek: WeekPlanDay[], changes: PlanChange[]): Merged[] {
   const now = input.now ?? new Date();
   const plan = input.plan;
   const sessionDays = plan.days.filter((x) => !isDaily(x));
   const kindOf = (focus: string): Merged['kind'] => (sessionsIn(plan, focus).length ? 'plan' : REST_RE.test(focus) || !focus ? 'rest' : 'new');
-  return base.recommendation.weekPlan.map((planned, off) => {
+  const SKIP_RE = /\b(skip|skipped|remove|removed|drop|dropped|cancel|cancelled|no|without|miss|missing|off)\b/i;
+  return startWeek.map((planned, off) => {
     const wd = (now.getDay() + off) % 7;
+    const dayChanges = changes.filter((c) => weekdayOfLabel(c.day, now) === wd);
+    // Sports scheduled that day and still in the current week (an earlier change may have skipped one).
     const acts = (plan.activities ?? []).filter((a) => a.weekdays.includes(wd));
-    const actLabel = acts.map((a) => activityLabel(a, input.customExercises)).join(' + ') || undefined;
-    const sportNames = acts.map((a) => findExercise(a.exerciseId, input.customExercises)?.name ?? a.exerciseId);
+    const nameOf = (a: (typeof acts)[number]) => findExercise(a.exerciseId, input.customExercises)?.name ?? a.exerciseId;
+    const present = acts.filter((a) => (planned.activity ?? '').toLowerCase().includes(nameOf(a).toLowerCase()));
+    // A sport can be skipped (never moved or added) when a change for that day names it.
+    // Only the change itself counts ("Skipped yoga"), not the reason ("…fresh for basketball").
+    const skipped = present.filter((a) => dayChanges.some((c) => c.change.toLowerCase().includes(nameOf(a).toLowerCase()) && SKIP_RE.test(c.change)));
+    const remaining = present.filter((a) => !skipped.includes(a));
+    const actLabel = remaining.map((a) => activityLabel(a, input.customExercises)).join(' + ') || undefined;
+    const sportNames = acts.map(nameOf);
     const plannedFocus = stripSports(planned.focus, sportNames);
     const plannedNames = sessionsIn(plan, plannedFocus);
+    const sportChanged = skipped.length > 0;
+    const keepDay: WeekPlanDay = sportChanged
+      ? { ...planned, focus: plannedFocus || actLabel || 'Rest / easy cardio', activity: actLabel, changed: true }
+      : planned;
     const keep: Merged = {
-      day: planned,
-      kind: plannedNames.length ? 'plan' : 'rest',
+      day: keepDay,
+      kind: plannedNames.length ? 'plan' : plannedFocus && kindOf(plannedFocus) === 'new' ? 'new' : 'rest',
       planDay: sessionDays.find((x) => x.name === plannedNames[0]),
     };
     const ai = aiWeek.find((x) => weekdayOfLabel(x.day, now) === wd);
@@ -440,13 +469,12 @@ function mergeWeek(input: PlannerInput, base: PlannerOutput, aiWeek: WeekPlanDay
     const focus = stripSports(ai.focus, sportNames).slice(0, 60);
     if (focus.toLowerCase() === plannedFocus.toLowerCase() || (!focus && !plannedNames.length)) return keep;
     const kind = kindOf(focus);
-    if (kind === 'rest' && !plannedNames.length) return keep; // already a rest day
+    if (kind === 'rest' && !plannedNames.length && keep.kind === 'rest') return keep; // already a rest day
     const names = sessionsIn(plan, focus);
-    const justified = changes.some((c) => weekdayOfLabel(c.day, now) === wd);
-    if (kind === 'new' && !justified) return keep;
+    if (kind === 'new' && !dayChanges.length) return keep;
     const shown = kind === 'rest' ? actLabel ?? 'Rest / easy cardio' : focus;
     return {
-      day: { day: planned.day, focus: shown, activity: actLabel, changed: true },
+      day: { day: planned.day, date: planned.date, focus: shown, activity: actLabel, changed: true },
       kind,
       planDay: sessionDays.find((x) => x.name === names[0]),
     };

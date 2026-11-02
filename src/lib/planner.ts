@@ -294,9 +294,10 @@ export function weekPlanFrom(
       sessionsToday.push(rotating[(startIdx + k) % n].name);
       k++;
     }
-    if (sessionsToday.length) out.push({ day: label, focus: sessionsToday.join(' + '), activity: acts || undefined });
-    else if (acts) out.push({ day: label, focus: acts, activity: acts });
-    else out.push({ day: label, focus: 'Rest / easy cardio' });
+    const date = isoDate(d);
+    if (sessionsToday.length) out.push({ day: label, focus: sessionsToday.join(' + '), activity: acts || undefined, date });
+    else if (acts) out.push({ day: label, focus: acts, activity: acts, date });
+    else out.push({ day: label, focus: 'Rest / easy cardio', date });
   }
   return out;
 }
@@ -330,6 +331,8 @@ const HEADLINES: Record<TrainingSnapshot['status'], string> = {
 
 export interface PlannerInput {
   plan: BasePlan;
+  /** The last recommendation, so this week's earlier changes carry forward. */
+  previous?: Recommendation | null;
   unit: Unit;
   sessions: Session[];
   customExercises: Exercise[];

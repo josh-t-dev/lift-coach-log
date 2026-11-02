@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
 import type { AppState, Recommendation, TemplateExercise, WeekPlanDay } from '../types';
-import { blockWeek, isoDate, snapshot } from '../lib/analytics';
+import { blockWeek, isoDate, snapshot, weekStart } from '../lib/analytics';
+import { upcomingChanges, weekView, type WeekCell } from '../lib/week';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend } from '../lib/llm';
 import { presetOf } from '../lib/providers';
@@ -19,13 +20,27 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   const plan = state.plan;
   const snap = useMemo(() => snapshot(state.sessions, plan, state.customExercises), [state.sessions, plan, state.customExercises]);
   const reviewDue = plan.reviewDate <= isoDate(new Date());
-  const todaysActivities = (plan.activities ?? []).filter((a) => a.weekdays.includes(new Date().getDay()));
   const todaysDays = planDaysOn(plan.days, new Date()).sort((a, b) => Number(isDaily(b)) - Number(isDaily(a)));
   const doneToday = new Set(state.sessions.filter((x) => x.finishedAt && isoDate(new Date(x.startedAt)) === isoDate(new Date())).map((x) => x.name));
   const block = blockWeek(plan);
   const weekNote = plan.weekNotes?.[block.week - 1];
   const rec = state.recommendation;
-  const stale = rec && isoDate(new Date(rec.createdAt)) !== isoDate(new Date());
+  const now = new Date();
+  // A plan from an earlier week no longer applies; one from earlier this week
+  // still carries its changes for the days ahead, but its "today" is stale.
+  const recThisWeek = rec && new Date(rec.createdAt) >= weekStart(now) ? rec : null;
+  const stale = !!recThisWeek && isoDate(new Date(recThisWeek.createdAt)) !== isoDate(now);
+  const cells = useMemo(
+    () => weekView(plan, state.sessions, recThisWeek, state.unit, state.customExercises),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plan, state.sessions, recThisWeek, state.unit, state.customExercises, isoDate(now)],
+  );
+  const todayCell = cells.find((c) => c.status === 'today');
+  const changesAhead = upcomingChanges(recThisWeek, now);
+  const todaysActivities = (plan.activities ?? [])
+    .filter((a) => a.weekdays.includes(new Date().getDay()))
+    // Hide a sport the coach skipped for today.
+    .filter((a) => !todayCell || (todayCell.activity ?? '').toLowerCase().includes(exerciseName(a.exerciseId, state.customExercises).toLowerCase()));
 
   const ask = async () => {
     abort.current?.abort();
@@ -34,7 +49,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
     setLoading(true);
     try {
       const r = await recommend(
-        { plan, unit: state.unit, distanceUnit: state.distanceUnit, sessions: state.sessions, customExercises: state.customExercises },
+        { plan, unit: state.unit, distanceUnit: state.distanceUnit, sessions: state.sessions, customExercises: state.customExercises, previous: state.recommendation },
         state.llm,
         request,
         ctl.signal,
@@ -148,7 +163,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
           {rec && <span className="tag">{rec.source === 'llm' ? `AI · ${rec.model}` : 'Built-in rules'}</span>}
         </div>
 
-        {!rec && (
+        {!recThisWeek && (
           <p className="small muted" style={{ marginTop: 6 }}>
             Get this week's schedule and today's workout, built from your base plan and adjusted for how your training has gone.
             <br />
@@ -162,76 +177,86 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
           </p>
         )}
 
-        {rec && (
-          <div className="stack" style={{ marginTop: 8 }}>
-            {rec.warning && (
-              <div className="banner warn">
-                {rec.warning}{' '}
-                <button className="btn small ghost" onClick={goSettings}>AI settings</button>
-              </div>
-            )}
-            {stale && <div className="banner info">This plan is from {new Date(rec.createdAt).toLocaleDateString()}. Refresh for today.</div>}
-            <div>
-              <h3 style={{ fontSize: 17 }}>{rec.headline}</h3>
-              {rec.planName && <div className="small muted" style={{ marginBottom: 4 }}>From your plan: <button className="btn small ghost" style={{ padding: 0, minHeight: 0 }} onClick={goPlan}>{rec.planName}</button></div>}
-              <p className="small">{rec.summary}</p>
+        <div className="stack" style={{ marginTop: 8 }}>
+          {recThisWeek?.warning && !stale && (
+            <div className="banner warn">
+              {recThisWeek.warning}{' '}
+              <button className="btn small ghost" onClick={goSettings}>AI settings</button>
             </div>
-            <WeekStrip days={rec.weekPlan} />
-            {rec.changes?.length ? (
-              <div className="changes">
-                <h3>What the coach changed this week</h3>
-                <ul className="bullets">
-                  {rec.changes.map((c, i) => (
-                    <li key={i}>
-                      <b>{c.day.replace(/^Today \((\w+)\)$/, '$1')}</b> · {c.change} — {c.reason}
-                      {c.principle && <span className="muted"> (follows: {c.principle})</span>}
-                    </li>
-                  ))}
-                </ul>
-                <p className="small muted" style={{ margin: '4px 0 0' }}>Your base plan is unchanged; next week starts from it again.</p>
-              </div>
-            ) : null}
+          )}
+          {recThisWeek && (
             <div>
-              <h3>{nextLabel(rec)}: {rec.today.name}</h3>
-              <ul className="list">
-                {rec.today.exercises.map((e, i) => (
-                  <li key={i} className="row spread">
-                    <div className="grow">
-                      <div>{exerciseName(e.exerciseId, state.customExercises)}</div>
-                      {e.note && <div className="small muted">{e.note}</div>}
-                    </div>
-                    {metricOf(e, state.customExercises) === 'time_distance' ? (
-                      <div className="small" style={{ textAlign: 'right' }}>
-                        {timedTarget(e, state) || 'time & distance'}
-                      </div>
-                    ) : (
-                      <div className="small" style={{ textAlign: 'right' }}>
-                        {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
-                        {loadText(e, state) && <div className="muted">{loadText(e, state)}</div>}
-                      </div>
-                    )}
+              {stale && (
+                <div className="banner info" style={{ marginBottom: 8 }}>
+                  Plan made {new Date(recThisWeek.createdAt).toLocaleDateString(undefined, { weekday: 'long' })}. Its changes for the days ahead still apply — tap <b>Refresh plan</b> for today.
+                </div>
+              )}
+              <h3 style={{ fontSize: 17 }}>{recThisWeek.headline}</h3>
+              {recThisWeek.planName && <div className="small muted" style={{ marginBottom: 4 }}>From your plan: <button className="btn small ghost" style={{ padding: 0, minHeight: 0 }} onClick={goPlan}>{recThisWeek.planName}</button></div>}
+              {!stale && <p className="small">{recThisWeek.summary}</p>}
+            </div>
+          )}
+          <WeekStrip cells={cells} />
+          {changesAhead.length ? (
+            <div className="changes">
+              <h3>What the coach changed this week</h3>
+              <ul className="bullets">
+                {changesAhead.map((c, i) => (
+                  <li key={i}>
+                    <b>{c.date ? new Date(c.date + 'T00:00').toLocaleDateString(undefined, { weekday: 'short' }) : c.day}</b>
+                    {c.scope && <span className="tag" style={{ marginLeft: 6 }}>{c.scope === 'today' ? 'today only' : 'rest of week'}</span>}
+                    {' · '}{c.change} — {c.reason}
+                    {c.principle && <span className="muted"> (follows: {c.principle})</span>}
                   </li>
                 ))}
               </ul>
+              <p className="small muted" style={{ margin: '4px 0 0' }}>Your base plan is unchanged; next week starts from it again.</p>
             </div>
-            <div className="row wrap">
-              <button className="btn primary grow" onClick={() => begin(rec.today.name, rec.today.exercises, 'coach')}>Start this workout</button>
-              <button
-                className="btn"
-                onClick={() => {
-                  update((d) => void d.templates.push({ id: uid(), name: rec.today.name, exercises: rec.today.exercises, updatedAt: new Date().toISOString() }));
-                  alert(`Saved "${rec.today.name}" to your workouts.`);
-                }}
-              >
-                Save
-              </button>
-            </div>
-            <details>
-              <summary className="small" style={{ cursor: 'pointer' }}>Why this plan</summary>
-              <ul className="bullets">{rec.rationale.map((r, i) => <li key={i}>{r}</li>)}</ul>
-            </details>
-          </div>
-        )}
+          ) : null}
+          {recThisWeek && !stale && (
+            <>
+              <div>
+                <h3>{nextLabel(recThisWeek)}: {recThisWeek.today.name}</h3>
+                <ul className="list">
+                  {recThisWeek.today.exercises.map((e, i) => (
+                    <li key={i} className="row spread">
+                      <div className="grow">
+                        <div>{exerciseName(e.exerciseId, state.customExercises)}</div>
+                        {e.note && <div className="small muted">{e.note}</div>}
+                      </div>
+                      {metricOf(e, state.customExercises) === 'time_distance' ? (
+                        <div className="small" style={{ textAlign: 'right' }}>
+                          {timedTarget(e, state) || 'time & distance'}
+                        </div>
+                      ) : (
+                        <div className="small" style={{ textAlign: 'right' }}>
+                          {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
+                          {loadText(e, state) && <div className="muted">{loadText(e, state)}</div>}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="row wrap">
+                <button className="btn primary grow" onClick={() => begin(recThisWeek.today.name, recThisWeek.today.exercises, 'coach')}>Start this workout</button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    update((d) => void d.templates.push({ id: uid(), name: recThisWeek.today.name, exercises: recThisWeek.today.exercises, updatedAt: new Date().toISOString() }));
+                    alert(`Saved "${recThisWeek.today.name}" to your workouts.`);
+                  }}
+                >
+                  Save
+                </button>
+              </div>
+              <details>
+                <summary className="small" style={{ cursor: 'pointer' }}>Why this plan</summary>
+                <ul className="bullets">{recThisWeek.rationale.map((r, i) => <li key={i}>{r}</li>)}</ul>
+              </details>
+            </>
+          )}
+        </div>
 
         <div className="stack" style={{ marginTop: 12 }}>
           <input
@@ -280,38 +305,32 @@ function loadText(e: TemplateExercise, state: AppState): string {
 
 const WD3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-/** Weekday (0 = Sun) for a plan label like "Today (Sun)", "Mon" or "Wednesday". */
-function weekdayOf(label: string): number {
-  const m = label.match(/(sun|mon|tue|wed|thu|fri|sat)/i);
-  if (m) return WD3.findIndex((w) => w.toLowerCase() === m[1].toLowerCase());
-  return /^today/i.test(label) ? new Date().getDay() : -1;
-}
-
-/** The week as two rows: Mon–Fri, then Sat–Sun. Today is highlighted. */
-function WeekStrip({ days }: { days: WeekPlanDay[] }) {
-  const today = new Date().getDay();
-  const byDay = new Map<number, WeekPlanDay>();
-  for (const d of days) {
-    const w = weekdayOf(d.day);
-    if (w >= 0 && !byDay.has(w)) byDay.set(w, d);
-  }
-  const cell = (w: number) => {
-    const d = byDay.get(w);
-    const rest = !d || /rest|walk|off/i.test(d.focus) || d.focus === d.activity;
+/** This calendar week as two rows: Mon–Fri, then Sat–Sun. Past days show done/missed; today is outlined. */
+function WeekStrip({ cells }: { cells: WeekCell[] }) {
+  const cell = (c: WeekCell) => {
+    const rest = /^(rest|rest \/ easy cardio)$/i.test(c.focus) || c.focus === c.activity;
+    const cls = [
+      c.status === 'done' ? 'done' : c.status === 'missed' ? 'missed' : rest ? '' : 'train',
+      c.activity && c.status !== 'missed' ? 'activity' : '',
+      c.status === 'today' ? 'today' : '',
+      c.changed ? 'changed' : '',
+      c.status === 'done' || c.status === 'missed' || c.status === 'rest' ? 'past' : '',
+    ].join(' ');
     return (
-      <div key={w} className={`${rest ? '' : 'train'} ${d?.activity ? 'activity' : ''} ${w === today ? 'today' : ''} ${d?.changed ? 'changed' : ''}`}
-        title={d?.changed ? 'Changed by the coach this week' : undefined}>
-        <b>{w === today ? 'Today' : WD3[w]}</b>
-        {d ? d.focus.replace(/ \d+ min/g, '') : '—'}
-        {d?.activity && d.activity !== d.focus && <i>+ {d.activity.replace(/ \d+ min/g, '')}</i>}
+      <div key={c.date} className={cls} title={c.changed ? 'Changed by the coach this week' : undefined}>
+        <b>{c.status === 'today' ? 'Today' : WD3[c.weekday]}</b>
+        {c.status === 'done' && '✓ '}
+        {c.focus.replace(/ \d+ min/g, '')}
+        {c.status === 'missed' && <span className="small"> · missed</span>}
+        {c.activity && c.activity !== c.focus && c.status !== 'missed' && <i>+ {c.activity.replace(/ \d+ min/g, '')}</i>}
       </div>
     );
   };
   return (
     <div className="week-strip" aria-label="This week">
-      <div className="plan-days wk5">{[1, 2, 3, 4, 5].map(cell)}</div>
-      <div className="plan-days wk2">{[6, 0].map(cell)}</div>
-      {days.some((d) => d.changed) && <p className="small muted" style={{ margin: 0 }}><span className="changed-dot" /> changed by the coach this week</p>}
+      <div className="plan-days wk5">{cells.slice(0, 5).map(cell)}</div>
+      <div className="plan-days wk2">{cells.slice(5, 7).map(cell)}</div>
+      {cells.some((d) => d.changed) && <p className="small muted" style={{ margin: 0 }}><span className="changed-dot" /> changed by the coach this week</p>}
     </div>
   );
 }

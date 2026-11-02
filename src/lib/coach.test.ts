@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { findExercise } from '../data/exercises';
 import { hydrate, importPlan } from '../store';
+import { upcomingChanges, weekView } from './week';
 import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
@@ -721,5 +722,80 @@ describe('coach changes with reasons', () => {
     const rec = parseRecommendation(reply, { ...inp, now: THU }, planWithRules({ ...inp, now: THU }), 'm');
     expect(rec.today.name).toBe('Upper (short)');
     expect(rec.today.exercises.map((e) => e.sets)).toEqual([3, 2]);
+  });
+});
+
+describe('this week: dates, carry-forward and scope', () => {
+  const p: BasePlan = {
+    ...plan, startDate: '2026-10-12', reviewDate: '2026-11-23',
+    activities: [
+      { id: 'y', exerciseId: 'yoga', weekdays: [1], minutes: 20, intensity: 'light' },
+      { id: 'b', exerciseId: 'basketball', weekdays: [3], minutes: 60, intensity: 'hard' },
+    ],
+    days: [
+      { id: 'r', name: 'Morning Routine', weekdays: [0, 1, 2, 3, 4, 5, 6], exercises: [{ exerciseId: 'hip-cars', sets: 2, repMin: 3, repMax: 3 }] },
+      { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [{ exerciseId: 'accel-sprint', metric: 'time_distance', sets: 6, repMin: 0, repMax: 0, distance: 20 }] },
+      { id: 'w', name: 'Lower A', weekdays: [3], exercises: [{ exerciseId: 'trap-bar-deadlift', sets: 4, repMin: 3, repMax: 5 }] },
+      { id: 't', name: 'Upper', weekdays: [4], exercises: [{ exerciseId: 'bench-press', sets: 4, repMin: 4, repMax: 6 }] },
+      { id: 's', name: 'Easy Run', weekdays: [0], exercises: [{ exerciseId: 'easy-run', metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: 40 }] },
+    ],
+  };
+  const SUN = new Date(2026, 10, 1, 18);
+  const MON = new Date(2026, 10, 2, 8, 55);
+  const WED = new Date(2026, 10, 4, 9);
+  const did = (date: Date, name: string): Session => ({ id: name + date.getDate(), name, source: 'template', startedAt: date.toISOString(), finishedAt: date.toISOString(), exercises: [] });
+
+  it("doesn't carry Sunday's 'rest today' into the new week", () => {
+    const sunRec = parseRecommendation(
+      { weekPlan: [{ day: 'Today', focus: 'Rest' }], changes: [{ day: 'Sun', change: 'Rest instead of easy run', reason: 'Long break' }], today: { name: 'Rest', exercises: [] } },
+      { ...input, plan: p, now: SUN }, planWithRules({ ...input, plan: p, now: SUN }), 'm');
+    expect(sunRec.weekPlan[0]).toMatchObject({ focus: 'Rest / easy cardio', changed: true, date: '2026-11-01' });
+    const recMadeSun = { ...sunRec, createdAt: SUN.toISOString() };
+    const view = weekView(p, [], recMadeSun, 'kg', [], MON);
+    expect(view.map((c) => c.date)).toEqual(['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08']);
+    expect(view[0]).toMatchObject({ status: 'today', focus: 'Sprints + Plyos', activity: 'Yoga 20 min' });
+    expect(view[6]).toMatchObject({ status: 'upcoming', focus: 'Easy Run' });
+    expect(view[6].changed).toBeFalsy();
+    expect(upcomingChanges(recMadeSun, MON)).toEqual([]);
+  });
+
+  it('shows past days as done or missed', () => {
+    const view = weekView(p, [did(new Date(2026, 10, 2, 17), 'Sprints + Plyos')], null, 'kg', [], WED);
+    expect(view[0]).toMatchObject({ status: 'done', focus: 'Sprints + Plyos' });
+    expect(view[1]).toMatchObject({ status: 'rest' });
+    expect(view[2]).toMatchObject({ status: 'today', focus: 'Lower A' });
+  });
+
+  it("skips a sport when the change names it, and keeps earlier changes when only today changes", () => {
+    const monInput = { ...input, plan: p, now: MON };
+    const monRec = { ...parseRecommendation({
+      weekPlan: [{ day: 'Today', focus: 'Sprints + Plyos' }, { day: 'Wed', focus: 'Basketball' }],
+      changes: [
+        { day: 'Mon', change: 'Skipped yoga', reason: 'User asked for no yoga today.', principle: "user's request", scope: 'today' },
+        { day: 'Wed', change: 'Skipped Lower A', reason: 'Fresh legs for basketball.', principle: 'drop order', scope: 'week' },
+      ],
+      today: { name: 'Sprints + Plyos', exercises: [{ exerciseId: 'accel-sprint', sets: 6, distance: 20 }] },
+    }, monInput, planWithRules(monInput), 'm'), createdAt: MON.toISOString() };
+    expect(monRec.weekPlan[0]).toMatchObject({ focus: 'Sprints + Plyos', changed: true });
+    expect(monRec.weekPlan[0].activity).toBeUndefined();
+    expect(monRec.weekPlan[2]).toMatchObject({ focus: 'Basketball 60 min', activity: 'Basketball 60 min', changed: true });
+    expect(monRec.changes?.map((c) => [c.date, c.scope])).toEqual([['2026-11-02', 'today'], ['2026-11-04', 'week']]);
+
+    // Tuesday: the user asks for something about today only; Wednesday's earlier skip must stay.
+    const TUE = new Date(2026, 10, 3, 8);
+    const tueInput = { ...input, plan: p, now: TUE, previous: monRec };
+    const base = planWithRules(tueInput);
+    const prompt = buildUserPrompt(tueInput, base, 'only 20 min today');
+    expect(prompt).toContain('"CURRENT_WEEK"');
+    expect(prompt).toContain('Skipped Lower A');
+    expect(buildSystemPrompt(p)).toMatch(/"scope": "today"/);
+    const tueRec = parseRecommendation({
+      weekPlan: [{ day: 'Today', focus: 'Recovery: mobility 20 min' }],
+      changes: [{ day: 'Tue', change: 'Rest day → 20 min mobility', reason: 'Only 20 min available.', scope: 'today' }],
+      today: { name: 'Recovery: mobility 20 min', exercises: [{ exerciseId: 'worlds-greatest', minutes: 10 }] },
+    }, tueInput, base, 'm');
+    expect(tueRec.weekPlan[1]).toMatchObject({ focus: 'Basketball 60 min', changed: true }); // Wed still skipped
+    expect(tueRec.changes?.map((c) => c.date)).toEqual(['2026-11-04', '2026-11-03']);
+    expect(tueRec.today.name).toBe('Recovery: mobility 20 min');
   });
 });
