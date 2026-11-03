@@ -20,7 +20,8 @@ export interface Preset {
   keyWhere?: string;
   jsonMode: boolean;
   openWeight: boolean;
-  models: { id: string; note: string }[];
+  /** Suggested models; `label` is a short name for the chip. */
+  models: { id: string; note: string; label?: string }[];
   setup: string[];
 }
 
@@ -52,15 +53,17 @@ export const PRESETS: Preset[] = [
     label: 'Hugging Face — open-weight, hosted',
     api: 'openai',
     baseUrl: 'https://router.huggingface.co/v1',
-    model: 'openai/gpt-oss-20b',
+    model: 'openai/gpt-oss-120b',
     keyLabel: 'Hugging Face access token',
     keyWhere: 'huggingface.co → Settings → Access Tokens (a "Read" token with Inference Providers permission)',
     jsonMode: false,
     openWeight: true,
     models: [
-      { id: 'openai/gpt-oss-20b', note: 'Open-weight, fast and cheap' },
-      { id: 'openai/gpt-oss-120b', note: 'Open-weight, stronger reasoning' },
-      { id: 'meta-llama/Llama-3.1-8B-Instruct', note: 'Open-weight, small' },
+      // Large open-weight instruct models: these follow the long coaching prompt and
+      // return clean JSON. Smaller ones (gpt-oss-20b, Llama 3.1 8B) did poorly in use.
+      { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B', note: 'Recommended — reliable rules-following and JSON' },
+      { id: 'Qwen/Qwen3-235B-A22B-Instruct-2507', label: 'Qwen3 235B', note: 'Qwen3 flagship instruct — strong at detailed instructions' },
+      { id: 'deepseek-ai/DeepSeek-V3.1', label: 'DeepSeek V3.1', note: 'DeepSeek V3.1 — strong reasoning, low cost' },
     ],
     setup: [
       'Create a free Hugging Face account and an access token that can call Inference Providers.',

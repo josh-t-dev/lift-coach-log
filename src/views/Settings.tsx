@@ -91,10 +91,13 @@ export function Settings() {
           <div className="chips">
             {preset.models.map((m) => (
               <button key={m.id} className={`chip ${llm.model === m.id ? 'on' : ''}`} title={m.note} onClick={() => update((d) => void (d.llm.model = m.id))}>
-                {m.id}
+                {m.label ?? m.id}
               </button>
             ))}
           </div>
+        )}
+        {preset.models.find((m) => m.id === llm.model) && (
+          <p className="small muted" style={{ margin: 0 }}>{preset.models.find((m) => m.id === llm.model)!.note}</p>
         )}
         {(preset.keyLabel || preset.id === 'custom') && (
           <label className="field"><span>{preset.keyLabel ?? 'API key (if the server needs one)'}{preset.keyWhere ? ` — from ${preset.keyWhere}` : ''}</span>
