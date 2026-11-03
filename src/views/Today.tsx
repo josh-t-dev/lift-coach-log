@@ -5,7 +5,7 @@ import type { AppState, Recommendation, TemplateExercise, WeekPlanDay } from '..
 import { blockWeek, isoDate, snapshot, weekStart } from '../lib/analytics';
 import { upcomingChanges, weekView, type WeekCell } from '../lib/week';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
-import { recommend } from '../lib/llm';
+import { recommend, sessionsIn } from '../lib/llm';
 import { presetOf } from '../lib/providers';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Muscle } from '../types';
@@ -20,7 +20,6 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   const plan = state.plan;
   const snap = useMemo(() => snapshot(state.sessions, plan, state.customExercises), [state.sessions, plan, state.customExercises]);
   const reviewDue = plan.reviewDate <= isoDate(new Date());
-  const todaysDays = planDaysOn(plan.days, new Date()).sort((a, b) => Number(isDaily(b)) - Number(isDaily(a)));
   const doneToday = new Set(state.sessions.filter((x) => x.finishedAt && isoDate(new Date(x.startedAt)) === isoDate(new Date())).map((x) => x.name));
   const block = blockWeek(plan);
   const weekNote = plan.weekNotes?.[block.week - 1];
@@ -39,6 +38,37 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   const changesAhead = upcomingChanges(recThisWeek, now);
   const noteSince = Math.min(weekStart(now).getTime(), now.getTime() - 3 * 86_400_000);
   const rememberedNotes = state.coachNotes.filter((n) => new Date(n.at).getTime() >= noteSince);
+  // Today's plan follows the current week (incl. coach moves/changes), plus daily routines.
+  const todayItems = useMemo(() => {
+    const items: { key: string; label: string; sessionName: string; note?: string; exercises?: TemplateExercise[]; changed?: boolean; fromCoach?: boolean }[] = [];
+    const today = new Date();
+    for (const d of planDaysOn(plan.days, today).filter(isDaily)) {
+      const built = startablePlanDay(d, plan, state.unit, state.sessions, state.customExercises, today);
+      items.push({ key: d.id, label: d.name, sessionName: d.name, note: d.note, exercises: built.exercises });
+    }
+    if (todayCell && !/^rest\b/i.test(todayCell.focus) && todayCell.focus !== todayCell.activity) {
+      const lc = (x: string) => x.toLowerCase();
+      const names = sessionsIn(plan, todayCell.focus);
+      const sessionName = names.length === 1 ? names[0] : todayCell.focus;
+      const coachToday = recThisWeek?.today;
+      const coachMatches =
+        !!coachToday?.exercises.length &&
+        (lc(todayCell.focus).includes(lc(coachToday.name)) || lc(coachToday.name).includes(lc(todayCell.focus)) || names.some((n) => lc(coachToday.name).includes(lc(n))));
+      if (coachMatches) {
+        items.push({ key: 'coach', label: todayCell.focus, sessionName, exercises: coachToday!.exercises, changed: todayCell.changed, fromCoach: true });
+      } else if (names.length) {
+        for (const n of names) {
+          const d = plan.days.find((x) => x.name === n)!;
+          const built = startablePlanDay(d, plan, state.unit, state.sessions, state.customExercises, today);
+          items.push({ key: d.id, label: d.name, sessionName: d.name, note: d.note, exercises: built.exercises, changed: todayCell.changed });
+        }
+      } else {
+        items.push({ key: 'new', label: todayCell.focus, sessionName, changed: true });
+      }
+    }
+    return items;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan, state.sessions, state.unit, state.customExercises, todayCell, recThisWeek]);
   const todaysActivities = (plan.activities ?? [])
     .filter((a) => a.weekdays.includes(new Date().getDay()))
     // Hide a sport the coach skipped for today.
@@ -100,24 +130,29 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
         </div>
       )}
 
-      {todaysDays.length > 0 && (
+      {todayItems.length > 0 && (
         <div className="card">
           <h2>Today's plan</h2>
           <ul className="list">
-            {todaysDays.map((d) => {
-              const built = startablePlanDay(d, plan, state.unit, state.sessions, state.customExercises);
-              const done = doneToday.has(d.name);
+            {todayItems.map((it) => {
+              const done = doneToday.has(it.sessionName);
               return (
-                <li key={d.id} className="row spread" style={{ alignItems: 'flex-start' }}>
+                <li key={it.key} className="row spread" style={{ alignItems: 'flex-start' }}>
                   <div className="grow">
-                    <b>{d.name}</b> {done && <span className="badge">Done</span>}
-                    {d.note && <div className="small">{d.note}</div>}
-                    <div className="small muted">
-                      {built.exercises.filter((e) => e.note?.startsWith(`W${block.week}:`)).map((e) => `${exerciseName(e.exerciseId, state.customExercises)} ${e.note!.split(' — ')[0].replace(/^W\d+: /, '')}`).join(' · ')
-                        || summarize(built.exercises.map((e) => exerciseName(e.exerciseId, state.customExercises)))}
-                    </div>
+                    <b>{it.label}</b> {it.changed && <span className="changed-dot" title="Changed by the coach this week" />} {done && <span className="badge">Done</span>}
+                    {it.note && <div className="small">{it.note}</div>}
+                    {it.exercises ? (
+                      <div className="small muted">
+                        {it.exercises.filter((e) => e.note?.startsWith(`W${block.week}:`)).map((e) => `${exerciseName(e.exerciseId, state.customExercises)} ${e.note!.split(' — ')[0].replace(/^W\d+: /, '')}`).join(' · ')
+                          || summarize(it.exercises.map((e) => exerciseName(e.exerciseId, state.customExercises)))}
+                      </div>
+                    ) : (
+                      <div className="small muted">The coach added this session — tap Refresh plan to build its workout.</div>
+                    )}
                   </div>
-                  <button className={`btn ${done ? '' : 'primary'}`} onClick={() => begin(d.name, built.exercises, 'template')}>{done ? 'Again' : 'Start'}</button>
+                  {it.exercises && (
+                    <button className={`btn ${done ? '' : 'primary'}`} onClick={() => begin(it.sessionName, it.exercises!, it.fromCoach ? 'coach' : 'template')}>{done ? 'Again' : 'Start'}</button>
+                  )}
                 </li>
               );
             })}
@@ -256,7 +291,10 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
                 </ul>
               </div>
               <div className="row wrap">
-                <button className="btn primary grow" onClick={() => begin(recThisWeek.today.name, recThisWeek.today.exercises, 'coach')}>Start this workout</button>
+                <button className="btn primary grow" onClick={() => {
+                  const names = sessionsIn(plan, recThisWeek.today.name);
+                  begin(names.length === 1 ? names[0] : recThisWeek.today.name, recThisWeek.today.exercises, 'coach');
+                }}>Start this workout</button>
                 <button
                   className="btn"
                   onClick={() => {

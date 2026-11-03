@@ -107,7 +107,9 @@ export interface TrainingSnapshot {
 
 export function snapshot(sessions: Session[], plan: BasePlan, custom: Exercise[] = [], now: Date = new Date()): TrainingSnapshot {
   const profile = plan.profile;
-  const done = finished(sessions);
+  // A daily routine (e.g. a morning mobility routine) isn't a training session.
+  const routineNames = new Set(plan.days.filter((d) => (d.weekdays?.length ?? 0) >= 7).map((d) => d.name));
+  const done = finished(sessions).filter((s) => !routineNames.has(s.name));
   const thisMon = weekStart(now);
   const weeks: WeekSummary[] = [];
   for (let i = 4; i >= 0; i--) {
@@ -140,6 +142,10 @@ export function snapshot(sessions: Session[], plan: BasePlan, custom: Exercise[]
   } else if (daysSinceLast >= 14) {
     status = 'returning';
     statusText = `It's been ${daysSinceLast} days since your last workout.`;
+  } else if (trainedWeeks === 0 && lastWeekSessions.length === 0) {
+    // Only this week has any training: just getting started, not "on track".
+    status = 'new';
+    statusText = `Getting started: ${thisWeekSessions.length} of ${profile.daysPerWeek} sessions so far this week.`;
   } else if (lastWeekSessions.length < Math.ceil(profile.daysPerWeek / 2) && trainedWeeks > 0) {
     status = 'missed-last-week';
     statusText =

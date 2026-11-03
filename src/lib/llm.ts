@@ -424,7 +424,7 @@ export async function suggestRules(plan: BasePlan, settings: LlmSettings, reques
 
 
 /** Real (non-daily) plan sessions named in a schedule entry, longest names first. */
-function sessionsIn(plan: BasePlan, focus: string): string[] {
+export function sessionsIn(plan: BasePlan, focus: string): string[] {
   let rest = focus.toLowerCase();
   const found: string[] = [];
   for (const d of plan.days.filter((x) => !isDaily(x)).sort((a, b) => b.name.length - a.name.length)) {

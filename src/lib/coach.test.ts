@@ -905,3 +905,21 @@ describe('coach memory and compact labels', () => {
     expect(shortLabel('Speed + Power + Lower B')).toBe('Speed + Power + Lower B');
   });
 });
+
+describe('weekly session count and status', () => {
+  const p: BasePlan = { ...plan, profile: { ...plan.profile, daysPerWeek: 5 }, days: [
+    { id: 'r', name: 'Morning Routine', weekdays: [0, 1, 2, 3, 4, 5, 6], exercises: [] },
+    { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [] },
+  ] };
+  const TUE = new Date(2026, 10, 3, 7, 35);
+  const s = (d: Date, name: string): Session => ({ id: name + d.getTime(), name, source: 'template', startedAt: d.toISOString(), finishedAt: d.toISOString(), exercises: [] });
+
+  it("doesn't count the daily routine as a session, and says 'getting started' instead of 'on track: 0 of 5'", () => {
+    const snap = snapshot([s(new Date(2026, 10, 2, 7), 'Morning Routine'), s(new Date(2026, 10, 3, 7), 'Morning Routine')], p, [], TUE);
+    expect(snap.thisWeek.sessions).toBe(0);
+    const snap2 = snapshot([s(new Date(2026, 10, 2, 7), 'Morning Routine'), s(new Date(2026, 10, 2, 17), 'Sprints + Plyos')], p, [], TUE);
+    expect(snap2.thisWeek.sessions).toBe(1);
+    expect(snap2.status).toBe('new');
+    expect(snap2.statusText).toBe('Getting started: 1 of 5 sessions so far this week.');
+  });
+});
