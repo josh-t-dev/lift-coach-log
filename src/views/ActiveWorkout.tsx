@@ -140,7 +140,7 @@ export function ActiveWorkout({ onDone }: { onDone: () => void }) {
 
       {restUntil && (
         <div className="rest" role="status">
-          <span className="rest-time">Rest {mmss((restUntil - now) / 1000)}</span>
+          <span className="rest-time">Rest {mmss((restUntil - Date.now()) / 1000)}</span>
           {restLabel && <span className="rest-name small">{restLabel}</span>}
           <button className="btn" onClick={() => setRestUntil(restUntil + 30_000)}>+30s</button>
           <button className="btn" onClick={() => setRestUntil(null)}>Skip</button>
@@ -177,7 +177,7 @@ function ExerciseBlock({
   const secs = ex?.timeUnit === 'sec';
   const dUnit = ex?.distUnit === 'm' ? 'm' : distanceUnit;
   const t = log.target;
-  const rest = log.restSec ?? defaultRest;
+  const rest = log.restSec ?? defaultRestFor(ex, defaultRest);
 
   const editLog = (fn: (l: ExerciseLog) => void) => editActive((a) => {
     const l = a.exercises.find((x) => x.id === log.id);
@@ -233,7 +233,9 @@ function ExerciseBlock({
       if (willBeDone && timed && x.distance == null && t?.distance) x.distance = t.distance;
       x.done = willBeDone;
     });
-    if (willBeDone && !timed) onSetDone(rest, ex?.name ?? '');
+    // Rest after a lift set; for timed work (sprints, intervals) only when more rounds are left.
+    const roundsLeft = log.sets.some((x) => x.id !== s.id && !x.done);
+    if (willBeDone && (!timed || roundsLeft)) onSetDone(rest, ex?.name ?? '');
   };
 
   return (
@@ -243,7 +245,7 @@ function ExerciseBlock({
           <h3 style={{ margin: 0 }}>{ex?.name ?? log.exerciseId}</h3>
           <div className="small muted row wrap" style={{ gap: 6 }}>
             <span>{targetText() ?? (timed ? 'Time & distance' : 'Weight & reps')}</span>
-            {!timed && <RestSelect value={rest} onChange={(v) => editLog((l) => void (l.restSec = v))} />}
+            <RestSelect value={rest} onChange={(v) => editLog((l) => void (l.restSec = v))} />
           </div>
           {otherNote && <div className="small muted">{otherNote}</div>}
         </div>
@@ -355,7 +357,7 @@ function ExerciseBlock({
   );
 }
 
-const REST_OPTIONS = [0, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300];
+const REST_OPTIONS = [0, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360];
 
 export function fmtRest(sec: number): string {
   if (!sec) return 'Off';
@@ -375,4 +377,12 @@ export function RestSelect({ value, onChange, label = true }: { value: number; o
       </select>
     </label>
   );
+}
+
+/**
+ * Default rest for an exercise when none is set: sprints get 3 min (full recovery,
+ * roughly 1 min per 10 m sprinted); everything else uses the app default.
+ */
+export function defaultRestFor(ex: { timeUnit?: string } | undefined, appDefault: number): number {
+  return ex?.timeUnit === 'sec' ? Math.max(180, appDefault) : appDefault;
 }

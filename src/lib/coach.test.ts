@@ -3,6 +3,7 @@ import { findExercise } from '../data/exercises';
 import { hydrate, importPlan } from '../store';
 import { upcomingChanges, weekView } from './week';
 import { shortLabel } from '../views/Today';
+import { defaultRestFor } from '../views/ActiveWorkout';
 import { projectedCardioMinutes, weekPlanFrom } from './planner';
 import type { BasePlan, LlmSettings, Profile, Session } from '../types';
 import { cardioMinutes, e1rm, exerciseHistory, exerciseSeries, isWorkingSet, setsPerMuscle, snapshot, suggestLoad, weekStart, weeklySeries } from './analytics';
@@ -921,5 +922,14 @@ describe('weekly session count and status', () => {
     expect(snap2.thisWeek.sessions).toBe(1);
     expect(snap2.status).toBe('new');
     expect(snap2.statusText).toBe('Getting started: 1 of 5 sessions so far this week.');
+  });
+});
+
+describe('rest for timed work', () => {
+  it('defaults sprints to 3 min and other work to the app default', () => {
+    expect(defaultRestFor(findExercise('accel-sprint'), 90)).toBe(180);
+    expect(defaultRestFor(findExercise('fly-sprint'), 240)).toBe(240);
+    expect(defaultRestFor(findExercise('bike'), 90)).toBe(90);
+    expect(defaultRestFor(findExercise('bench-press'), 90)).toBe(90);
   });
 });

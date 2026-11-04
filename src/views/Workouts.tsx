@@ -4,7 +4,7 @@ import { NumInput } from '../components/NumInput';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
 import { startSession, uid, update, useAppState } from '../store';
 import type { Template, TemplateExercise } from '../types';
-import { fmtRest } from './ActiveWorkout';
+import { defaultRestFor, fmtRest } from './ActiveWorkout';
 
 /** "3×8–12" or "20 min · 5 km" */
 export function describeTarget(e: TemplateExercise, metric: string, distUnit: string): string {
@@ -191,6 +191,11 @@ export function WorkoutEditor<T extends Editable>({
                   <NumInput inputMode="numeric" min={1} value={e.sets} onChange={(v) => setEx(i, { sets: Math.round(v) })} /></label>
                 <label className="field"><span>Distance (m)</span>
                   <input type="number" inputMode="decimal" step="any" value={e.distance ?? ''} onChange={(ev) => setEx(i, { distance: opt(ev.target.value) })} /></label>
+                <label className="field" style={{ gridColumn: '1 / -1' }}><span>Rest between rounds</span>
+                  <select value={e.restSec ?? ''} onChange={(ev) => setEx(i, { restSec: ev.target.value === '' ? undefined : Number(ev.target.value) })}>
+                    <option value="">Default ({fmtRest(defaultRestFor(findExercise(e.exerciseId, state.customExercises), state.defaultRestSec))})</option>
+                    {[30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360].map((r) => <option key={r} value={r}>{fmtRest(r)}</option>)}
+                  </select></label>
               </div>
             ) : (
               <div className="grid2" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginTop: 8 }}>
@@ -200,6 +205,11 @@ export function WorkoutEditor<T extends Editable>({
                   <input type="number" inputMode="decimal" step="any" value={e.minutes ?? ''} onChange={(ev) => setEx(i, { minutes: opt(ev.target.value) })} /></label>
                 <label className="field"><span>Distance ({state.distanceUnit})</span>
                   <input type="number" inputMode="decimal" step="any" value={e.distance ?? ''} onChange={(ev) => setEx(i, { distance: opt(ev.target.value) })} /></label>
+                <label className="field" style={{ gridColumn: '1 / -1' }}><span>Rest between rounds</span>
+                  <select value={e.restSec ?? ''} onChange={(ev) => setEx(i, { restSec: ev.target.value === '' ? undefined : Number(ev.target.value) })}>
+                    <option value="">Default ({fmtRest(defaultRestFor(findExercise(e.exerciseId, state.customExercises), state.defaultRestSec))})</option>
+                    {[30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360].map((r) => <option key={r} value={r}>{fmtRest(r)}</option>)}
+                  </select></label>
               </div>
             )}
             <label className="field" style={{ marginTop: 8 }}><span>Note</span>
