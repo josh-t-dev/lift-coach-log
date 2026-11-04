@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
 import type { AppState, Recommendation, TemplateExercise, WeekPlanDay } from '../types';
-import { blockWeek, isoDate, snapshot, weekStart } from '../lib/analytics';
+import { addDays, blockWeek, isoDate, snapshot, weekStart } from '../lib/analytics';
 import { upcomingChanges, weekView, type WeekCell } from '../lib/week';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
 import { recommend, sessionsIn } from '../lib/llm';
@@ -38,6 +38,39 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
   const changesAhead = upcomingChanges(recThisWeek, now);
   const noteSince = Math.min(weekStart(now).getTime(), now.getTime() - 3 * 86_400_000);
   const rememberedNotes = state.coachNotes.filter((n) => new Date(n.at).getTime() >= noteSince);
+  const todayDone = !!todayCell?.logged?.length;
+  // Once today's session is logged, the coach card looks ahead to the next one.
+  const nextUp = useMemo(() => {
+    if (!todayDone) return null;
+    const isRest = (c: WeekCell) => /^rest\b/i.test(c.focus) || c.focus === c.activity;
+    for (let off = 1; off <= 7; off++) {
+      const date = addDays(new Date(), off);
+      const cell = cells.find((c) => c.date === isoDate(date));
+      let label: string;
+      if (cell) {
+        if (isRest(cell)) continue;
+        label = cell.focus;
+      } else {
+        // Beyond this week: the base plan's fixed sessions.
+        const days = planDaysOn(plan.days.filter((d) => !isDaily(d)), date);
+        if (!days.length) continue;
+        label = days.map((d) => d.name).join(' + ');
+      }
+      const names = sessionsIn(plan, label);
+      const day = plan.days.find((d) => d.name === names[0]);
+      const built = day ? startablePlanDay(day, plan, state.unit, state.sessions, state.customExercises, date) : null;
+      return {
+        label,
+        dayLabel: off === 1 ? 'tomorrow' : date.toLocaleDateString(undefined, { weekday: 'short' }),
+        sessionName: names.length === 1 ? names[0] : label,
+        exercises: built?.exercises,
+        changed: cell?.changed,
+      };
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayDone, cells, plan, state.sessions, state.unit, state.customExercises]);
+
   // Today's plan follows the current week (incl. coach moves/changes), plus daily routines.
   const todayItems = useMemo(() => {
     const items: { key: string; label: string; sessionName: string; note?: string; exercises?: TemplateExercise[]; changed?: boolean; fromCoach?: boolean }[] = [];
@@ -233,7 +266,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
           )}
           {recThisWeek && (
             <div>
-              {stale && (
+              {stale && !todayDone && (
                 <div className="banner info" style={{ marginBottom: 8 }}>
                   Plan made {new Date(recThisWeek.createdAt).toLocaleDateString(undefined, { weekday: 'long' })}. Its changes for the days ahead still apply — tap <b>Refresh plan</b> for today.
                 </div>
@@ -265,30 +298,36 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
               </div>
             </div>
           ) : null}
-          {recThisWeek && !stale && (
+          {todayDone && (
+            <div>
+              <p className="small" style={{ margin: '0 0 6px' }}>✓ Today's session is done — nice work.</p>
+              {nextUp ? (
+                <>
+                  <h3>
+                    Next session ({nextUp.dayLabel}): {nextUp.label}
+                    {nextUp.changed && <span className="changed-dot" title="Changed by the coach this week" />}
+                  </h3>
+                  {nextUp.exercises ? (
+                    <>
+                      <ExerciseList exercises={nextUp.exercises} state={state} />
+                      <button className="btn block" style={{ marginTop: 8 }} onClick={() => begin(nextUp.sessionName, nextUp.exercises!, 'template')}>
+                        Start early
+                      </button>
+                    </>
+                  ) : (
+                    <p className="small muted">The coach added this session — tap Refresh plan on the day to build its workout.</p>
+                  )}
+                </>
+              ) : (
+                <p className="small muted">Nothing else planned in the next 7 days.</p>
+              )}
+            </div>
+          )}
+          {recThisWeek && !stale && !todayDone && (
             <>
               <div>
                 <h3>{nextLabel(recThisWeek)}: {recThisWeek.today.name}</h3>
-                <ul className="list">
-                  {recThisWeek.today.exercises.map((e, i) => (
-                    <li key={i} className="row spread">
-                      <div className="grow">
-                        <div>{exerciseName(e.exerciseId, state.customExercises)}</div>
-                        {e.note && <div className="small muted">{e.note}</div>}
-                      </div>
-                      {metricOf(e, state.customExercises) === 'time_distance' ? (
-                        <div className="small" style={{ textAlign: 'right' }}>
-                          {timedTarget(e, state) || 'time & distance'}
-                        </div>
-                      ) : (
-                        <div className="small" style={{ textAlign: 'right' }}>
-                          {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
-                          {loadText(e, state) && <div className="muted">{loadText(e, state)}</div>}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <ExerciseList exercises={recThisWeek.today.exercises} state={state} />
               </div>
               <div className="row wrap">
                 <button className="btn primary grow" onClick={() => {
@@ -442,4 +481,28 @@ export function shortLabel(label: string): string {
     .replace(/^[\s+:–-]+|[\s+:–-]+$/g, '')
     .trim();
   return out || label;
+}
+
+/** A workout's exercises with targets, as shown in the coach card. */
+function ExerciseList({ exercises, state }: { exercises: TemplateExercise[]; state: AppState }) {
+  return (
+    <ul className="list">
+      {exercises.map((e, i) => (
+        <li key={i} className="row spread">
+          <div className="grow">
+            <div>{exerciseName(e.exerciseId, state.customExercises)}</div>
+            {e.note && <div className="small muted">{e.note}</div>}
+          </div>
+          {metricOf(e, state.customExercises) === 'time_distance' ? (
+            <div className="small" style={{ textAlign: 'right' }}>{timedTarget(e, state) || 'time & distance'}</div>
+          ) : (
+            <div className="small" style={{ textAlign: 'right' }}>
+              {e.sets} × {e.repMin === e.repMax ? e.repMin : `${e.repMin}–${e.repMax}`}
+              {loadText(e, state) && <div className="muted">{loadText(e, state)}</div>}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
