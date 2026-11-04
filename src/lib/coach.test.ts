@@ -933,3 +933,30 @@ describe('rest for timed work', () => {
     expect(defaultRestFor(findExercise('bench-press'), 90)).toBe(90);
   });
 });
+
+describe('week strip with moved and logged sessions', () => {
+  const p: BasePlan = { ...plan, startDate: '2026-11-02', reviewDate: '2026-12-14', days: [
+    { id: 'r', name: 'Morning Routine', weekdays: [0, 1, 2, 3, 4, 5, 6], exercises: [] },
+    { id: 'm', name: 'Sprints + Plyos', weekdays: [1], exercises: [] },
+    { id: 'w', name: 'Lower A', weekdays: [3], exercises: [] },
+  ] };
+  const TUE_PM = new Date(2026, 10, 3, 20, 57);
+  const log = (d: Date, name: string): Session => ({ id: name + d.getTime(), name, source: 'coach', startedAt: d.toISOString(), finishedAt: d.toISOString(), exercises: [] });
+
+  it("shows Monday's session as moved to today (not missed) and ticks today", () => {
+    const sessions = [log(new Date(2026, 10, 2, 7), 'Morning Routine'), log(new Date(2026, 10, 3, 19), 'Sprints + Plyos')];
+    // The latest plan was made Tuesday, so it no longer covers Monday.
+    const rec = { ...planWithRules({ ...input, plan: p, sessions, now: TUE_PM }).recommendation, createdAt: TUE_PM.toISOString() };
+    const view = weekView(p, sessions, rec, 'kg', [], TUE_PM);
+    expect(view[0]).toMatchObject({ status: 'moved', focus: 'Sprints + Plyos', movedTo: 2 });
+    expect(view[1]).toMatchObject({ status: 'today', logged: ['Sprints + Plyos'] });
+  });
+
+  it('marks a day the coach made a rest day as rest, and a genuinely skipped one as missed', () => {
+    const MON_AM = new Date(2026, 10, 2, 8);
+    const monRec = { ...planWithRules({ ...input, plan: p, now: MON_AM }).recommendation, createdAt: MON_AM.toISOString() };
+    monRec.weekPlan = monRec.weekPlan.map((d, i) => (i === 0 ? { ...d, focus: 'Rest / easy cardio', changed: true } : d));
+    expect(weekView(p, [], monRec, 'kg', [], TUE_PM)[0]).toMatchObject({ status: 'rest', changed: true });
+    expect(weekView(p, [], null, 'kg', [], TUE_PM)[0]).toMatchObject({ status: 'missed', focus: 'Sprints + Plyos' });
+  });
+});

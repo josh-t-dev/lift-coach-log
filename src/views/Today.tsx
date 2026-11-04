@@ -382,19 +382,21 @@ const WD3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function WeekStrip({ cells }: { cells: WeekCell[] }) {
   const cell = (c: WeekCell) => {
     const rest = /^(rest|rest \/ easy cardio)$/i.test(c.focus) || c.focus === c.activity;
+    const doneToday = c.status === 'today' && !!c.logged?.length;
     const cls = [
-      c.status === 'done' ? 'done' : c.status === 'missed' ? 'missed' : rest ? '' : 'train',
+      c.status === 'done' || doneToday ? 'done' : c.status === 'missed' ? 'missed' : c.status === 'moved' ? 'moved' : rest ? '' : 'train',
       c.activity && c.status !== 'missed' ? 'activity' : '',
       c.status === 'today' ? 'today' : '',
       c.changed ? 'changed' : '',
-      c.status === 'done' || c.status === 'missed' || c.status === 'rest' ? 'past' : '',
+      c.status === 'done' || c.status === 'missed' || c.status === 'moved' || c.status === 'rest' ? 'past' : '',
     ].join(' ');
     return (
       <div key={c.date} className={cls} title={c.changed ? 'Changed by the coach this week' : undefined}>
         <b>{c.status === 'today' ? 'Today' : WD3[c.weekday]}</b>
-        {c.status === 'done' && '✓ '}
+        {(c.status === 'done' || doneToday) && '✓ '}
         {shortLabel(c.focus)}
         {c.status === 'missed' && <span className="small"> · missed</span>}
+        {c.status === 'moved' && <span className="small">moved → {c.movedTo === new Date().getDay() ? 'today' : WD3[c.movedTo ?? 0]}</span>}
         {c.activity && c.activity !== c.focus && c.status !== 'missed' && <i>+ {shortLabel(c.activity)}</i>}
       </div>
     );

@@ -75,13 +75,18 @@ export interface WeekCell {
   focus: string;
   activity?: string;
   changed?: boolean;
-  status: 'done' | 'missed' | 'rest' | 'today' | 'upcoming';
+  status: 'done' | 'missed' | 'moved' | 'rest' | 'today' | 'upcoming';
+  /** Sessions logged on this day (today included). */
+  logged?: string[];
+  /** For 'moved': the weekday it was done on instead (0 = Sun). */
+  movedTo?: number;
 }
 
 /**
  * This calendar week (Mon–Sun) for the strip on Today. Past days show what
- * was logged (or what was missed); today and later show the plan with any
- * coach changes that still apply.
+ * was logged, what was done on another day instead ('moved'), what the coach
+ * turned into a rest day, or what was missed. Today and later show the plan
+ * with any coach changes that still apply; today is ticked once logged.
  */
 export function weekView(
   plan: BasePlan,
@@ -93,26 +98,61 @@ export function weekView(
 ): WeekCell[] {
   const mon = weekStart(now);
   const today = isoDate(now);
+  const end = isoDate(addDays(mon, 7));
   const fresh = currentWeek(planWithRules({ plan, unit, sessions, customExercises: custom, now }).recommendation.weekPlan, rec, now);
   const byDate = new Map(fresh.map((d) => [d.date!, d]));
+  // What the coach had for past days of this week (from the last plan, if it covered them).
+  const recByDate = new Map(rec ? datedDays(rec).map((d) => [d.date, d] as const) : []);
   const dailyNames = new Set(plan.days.filter(isDaily).map((d) => d.name));
+  const lc = (x: string) => x.toLowerCase();
+
+  // Training logged this week, by date (daily routines excluded).
+  const loggedOn = new Map<string, string[]>();
+  for (const s of sessions) {
+    if (!s.finishedAt || dailyNames.has(s.name)) continue;
+    const iso = isoDate(new Date(s.startedAt));
+    if (iso < isoDate(mon) || iso >= end) continue;
+    loggedOn.set(iso, [...(loggedOn.get(iso) ?? []), s.name]);
+  }
+  const doneElsewhere = (name: string, notOn: string): string | undefined => {
+    for (const [iso, names] of loggedOn) if (iso !== notOn && names.some((n) => lc(n) === lc(name))) return iso;
+    return undefined;
+  };
+
   const cells: WeekCell[] = [];
   for (let i = 0; i < 7; i++) {
     const date = addDays(mon, i);
     const iso = isoDate(date);
     const wd = date.getDay();
+    const logged = loggedOn.get(iso) ?? [];
+    const acts = (plan.activities ?? []).filter((a) => a.weekdays.includes(wd));
+    const actLabel = acts.map((a) => activityLabel(a, custom)).join(' + ') || undefined;
+    const sportNames = acts.map((a) => lc(findExercise(a.exerciseId, custom)?.name ?? ''));
+    const lifts = logged.filter((n) => !sportNames.includes(lc(n)));
+
     if (iso < today) {
-      const logged = sessions
-        .filter((s) => s.finishedAt && isoDate(new Date(s.startedAt)) === iso && !dailyNames.has(s.name))
-        .map((s) => s.name);
-      const planned = planDaysOn(plan.days.filter((d) => !isDaily(d)), date).map((d) => d.name);
-      const acts = (plan.activities ?? []).filter((a) => a.weekdays.includes(wd));
-      const actLabel = acts.map((a) => activityLabel(a, custom)).join(' + ') || undefined;
-      const sportNames = acts.map((a) => (findExercise(a.exerciseId, custom)?.name ?? '').toLowerCase());
-      const lifts = logged.filter((n) => !sportNames.includes(n.toLowerCase()));
-      if (logged.length) cells.push({ date: iso, weekday: wd, focus: [...new Set(lifts.length ? lifts : logged)].join(' + '), activity: lifts.length ? actLabel : undefined, status: 'done' });
-      else if (planned.length) cells.push({ date: iso, weekday: wd, focus: planned.join(' + '), activity: actLabel, status: 'missed' });
-      else cells.push({ date: iso, weekday: wd, focus: actLabel ?? 'Rest', activity: actLabel, status: 'rest' });
+      if (logged.length) {
+        cells.push({ date: iso, weekday: wd, focus: [...new Set(lifts.length ? lifts : logged)].join(' + '), activity: lifts.length ? actLabel : undefined, status: 'done', logged });
+        continue;
+      }
+      // The coach's version of this day if the last plan covered it, else the base plan.
+      const coachDay = recByDate.get(iso);
+      const planned = coachDay?.changed
+        ? plan.days.filter((d) => !isDaily(d) && lc(coachDay.focus).includes(lc(d.name))).map((d) => d.name)
+        : planDaysOn(plan.days.filter((d) => !isDaily(d)), date).map((d) => d.name);
+      if (!planned.length) {
+        // Past days only show a sport if it was logged.
+        cells.push({ date: iso, weekday: wd, focus: 'Rest', changed: coachDay?.changed, status: 'rest' });
+        continue;
+      }
+      // Done on another day this week (e.g. moved by the coach) → not missed.
+      const elsewhere = planned.map((n) => doneElsewhere(n, iso));
+      if (elsewhere.every(Boolean)) {
+        const movedTo = new Date(elsewhere[0]! + 'T00:00').getDay();
+        cells.push({ date: iso, weekday: wd, focus: planned.join(' + '), status: 'moved', movedTo });
+      } else {
+        cells.push({ date: iso, weekday: wd, focus: planned.join(' + '), status: 'missed' });
+      }
       continue;
     }
     const d = byDate.get(iso);
@@ -123,6 +163,7 @@ export function weekView(
       activity: d?.activity,
       changed: d?.changed,
       status: iso === today ? 'today' : 'upcoming',
+      logged: iso === today && logged.length ? logged : undefined,
     });
   }
   return cells;
