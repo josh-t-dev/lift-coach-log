@@ -960,3 +960,16 @@ describe('week strip with moved and logged sessions', () => {
     expect(weekView(p, [], null, 'kg', [], TUE_PM)[0]).toMatchObject({ status: 'missed', focus: 'Sprints + Plyos' });
   });
 });
+
+describe('logged sports', () => {
+  it("count toward cardio minutes but not the weekly training sessions", () => {
+    const p: BasePlan = { ...plan, activities: [{ id: 'b', exerciseId: 'basketball', weekdays: [3], minutes: 60, intensity: 'moderate' }] };
+    const WED = new Date(2026, 10, 4, 21);
+    const game: Session = { id: 'g', name: 'Basketball', source: 'template', startedAt: WED.toISOString(), finishedAt: WED.toISOString(),
+      exercises: [{ id: 'e', exerciseId: 'basketball', metric: 'time_distance', sets: [{ id: 's', weight: null, reps: null, rpe: null, durationSec: 3600, distance: null, done: true }] }] };
+    const lift: Session = { id: 'l', name: 'Lower A', source: 'template', startedAt: WED.toISOString(), finishedAt: WED.toISOString(), exercises: [] };
+    const snap = snapshot([game, lift], p, [], WED);
+    expect(snap.thisWeek.sessions).toBe(1);
+    expect(snap.thisWeek.cardioMinutes).toBe(60);
+  });
+});

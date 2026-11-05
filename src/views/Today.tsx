@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { BarList } from '../components/Charts';
+import { NumInput } from '../components/NumInput';
 import { exerciseName, findExercise, metricOf } from '../data/exercises';
-import type { AppState, Recommendation, TemplateExercise, WeekPlanDay } from '../types';
+import type { Activity, AppState, Recommendation, TemplateExercise, WeekPlanDay } from '../types';
 import { addDays, blockWeek, isoDate, snapshot, weekStart } from '../lib/analytics';
 import { upcomingChanges, weekView, type WeekCell } from '../lib/week';
 import { isDaily, planDaysOn, startablePlanDay } from '../lib/planner';
@@ -194,15 +195,7 @@ export function Today({ goWorkout, goSettings, goPlan }: { goWorkout: () => void
       )}
 
       {todaysActivities.map((a) => (
-        <div className="card row spread" key={a.id} style={{ borderColor: 'var(--warn)' }}>
-          <div>
-            <h3 style={{ margin: 0 }}>Today: {exerciseName(a.exerciseId, state.customExercises)}</h3>
-            <span className="small muted">{a.minutes} min · {a.intensity} · counts toward cardio</span>
-          </div>
-          <button className="btn" onClick={() => begin(exerciseName(a.exerciseId, state.customExercises), [{ exerciseId: a.exerciseId, metric: 'time_distance', sets: 1, repMin: 0, repMax: 0, minutes: a.minutes }], 'template')}>
-            Log it
-          </button>
-        </div>
+        <ActivityCard key={a.id} activity={a} state={state} />
       ))}
 
       {reviewDue && (
@@ -504,5 +497,60 @@ function ExerciseList({ exercises, state }: { exercises: TemplateExercise[]; sta
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Today's sport/activity: one tap logs it as done with its minutes (cardio),
+ * then shows it as logged with Undo.
+ */
+function ActivityCard({ activity, state }: { activity: Activity; state: AppState }) {
+  const name = exerciseName(activity.exerciseId, state.customExercises);
+  const [minutes, setMinutes] = useState(activity.minutes);
+  const today = isoDate(new Date());
+  const logged = state.sessions.find(
+    (s) => s.finishedAt && s.name === name && isoDate(new Date(s.startedAt)) === today && s.exercises.some((e) => e.exerciseId === activity.exerciseId),
+  );
+  const loggedMin = logged ? Math.round(logged.exercises.flatMap((e) => e.sets).reduce((t, x) => t + (x.durationSec ?? 0), 0) / 60) : 0;
+
+  const log = () => {
+    const at = new Date().toISOString();
+    update((d) =>
+      void d.sessions.push({
+        id: uid(),
+        name,
+        source: 'template',
+        startedAt: at,
+        finishedAt: at,
+        exercises: [{
+          id: uid(),
+          exerciseId: activity.exerciseId,
+          metric: 'time_distance',
+          sets: [{ id: uid(), weight: null, reps: null, rpe: null, durationSec: Math.max(1, minutes) * 60, distance: null, done: true }],
+        }],
+      }),
+    );
+  };
+
+  return (
+    <div className="card row spread" style={{ borderColor: 'var(--warn)', gap: 10 }}>
+      <div className="grow">
+        <h3 style={{ margin: 0 }}>Today: {name} {logged && <span className="badge">✓ Logged</span>}</h3>
+        <span className="small muted">
+          {logged ? `${loggedMin} min logged · counts toward cardio` : `${activity.intensity} · counts toward cardio`}
+        </span>
+      </div>
+      {logged ? (
+        <button className="btn ghost small" onClick={() => update((d) => void (d.sessions = d.sessions.filter((s) => s.id !== logged.id)))}>Undo</button>
+      ) : (
+        <div className="row" style={{ gap: 6 }}>
+          <label className="row small" style={{ gap: 4 }}>
+            <NumInput inputMode="numeric" min={1} max={600} value={minutes} onChange={setMinutes} aria-label={`${name} minutes`} style={{ width: 64, textAlign: 'center' }} />
+            min
+          </label>
+          <button className="btn primary" onClick={log}>Log it</button>
+        </div>
+      )}
+    </div>
   );
 }

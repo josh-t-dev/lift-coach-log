@@ -109,7 +109,9 @@ export function snapshot(sessions: Session[], plan: BasePlan, custom: Exercise[]
   const profile = plan.profile;
   // A daily routine (e.g. a morning mobility routine) isn't a training session.
   const routineNames = new Set(plan.days.filter((d) => (d.weekdays?.length ?? 0) >= 7).map((d) => d.name));
-  const done = finished(sessions).filter((s) => !routineNames.has(s.name));
+  // Logged sports (basketball, yoga…) count toward cardio, not the weekly training sessions.
+  const sportNames = new Set((plan.activities ?? []).map((a) => findExercise(a.exerciseId, custom)?.name ?? a.exerciseId));
+  const done = finished(sessions).filter((s) => !routineNames.has(s.name) && !sportNames.has(s.name));
   const thisMon = weekStart(now);
   const weeks: WeekSummary[] = [];
   for (let i = 4; i >= 0; i--) {
@@ -128,6 +130,7 @@ export function snapshot(sessions: Session[], plan: BasePlan, custom: Exercise[]
     ? Math.floor((startOfDay(now).getTime() - startOfDay(new Date(last.startedAt)).getTime()) / DAY_MS)
     : null;
 
+  const allDone = finished(sessions); // for cardio minutes: sports included
   const thisWeekSessions = sessionsBetween(done, thisMon, addDays(thisMon, 7));
   const lastWeekSessions = sessionsBetween(done, addDays(thisMon, -7), thisMon);
 
@@ -166,8 +169,8 @@ export function snapshot(sessions: Session[], plan: BasePlan, custom: Exercise[]
     daysSinceLast,
     weeks,
     adherence4wk,
-    thisWeek: { sessions: thisWeekSessions.length, setsPerMuscle: setsPerMuscle(thisWeekSessions, custom), cardioMinutes: cardioMinutes(thisWeekSessions, custom) },
-    lastWeek: { sessions: lastWeekSessions.length, setsPerMuscle: setsPerMuscle(lastWeekSessions, custom), cardioMinutes: cardioMinutes(lastWeekSessions, custom) },
+    thisWeek: { sessions: thisWeekSessions.length, setsPerMuscle: setsPerMuscle(thisWeekSessions, custom), cardioMinutes: cardioMinutes(sessionsBetween(allDone, thisMon, addDays(thisMon, 7)), custom) },
+    lastWeek: { sessions: lastWeekSessions.length, setsPerMuscle: setsPerMuscle(lastWeekSessions, custom), cardioMinutes: cardioMinutes(sessionsBetween(allDone, addDays(thisMon, -7), thisMon), custom) },
     setTargets: plan.setTargets,
     cardioTarget: plan.cardioMinutes,
     adjustment: adj
